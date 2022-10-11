@@ -46,20 +46,20 @@ def get_bettingdata_spread(week):
     df.to_csv(file_name)
     return df
 
-def get_current_rankings(week, x_hash_header, defense=False):
+def get_current_rankings(week, x_hash_header, year_string='current', defense=False):
     # @param week: Week for ranking query.
     # @param x_hash: added param as x_hash header changes week over week.
     # https://www.lineups.com/nfl-team-rankings
     
     defense_string = "defense/" if defense else ""
-    url = f"https://api.lineups.com/nfl/fetch/teams/team-rankings/{defense_string}current"
+    url = f"https://api.lineups.com/nfl/fetch/teams/team-rankings/{defense_string}{year_string}"
     
     file_name = f"./ranking/week_{week}_defense.csv" if defense else f"./ranking/week_{week}.csv"
     if os.path.isfile(file_name):
         print('return cached data', f"week {week}")
         return pd.read_csv(file_name)
     else:
-        print('fetching data', x_hash_header)
+        print('fetching data', x_hash_header, url)
     
 
     payload={}
