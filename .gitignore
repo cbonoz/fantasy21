@@ -5,3 +5,4 @@ __pycache__/
 ranking/*.json
 data23
 data24
+env
