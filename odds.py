@@ -14,7 +14,7 @@ def get_bettingdata_spread(week):
         return pd.read_csv(file_name)
     else:
         print('fetching data')
-        
+
     payload = "{\"filters\":{\"scope\":1,\"subscope\":2,\"week\":" + str(week) + ",\"season\":2021,\"seasontype\":1,\"team\":null,\"conference\":null,\"exportType\":null,\"date\":null,\"teamkey\":\"ARI\",\"show_no_odds\":false,\"client\":1,\"state\":\"WORLD\",\"geo_state\":null,\"league\":\"nfl\",\"widget_scope\":1}}"
     headers = {
       'authority': 'bettingdata.com',
@@ -40,7 +40,7 @@ def get_bettingdata_spread(week):
         data = response.text
         print('error', data, e)
         return pd.DataFrame()
-        
+
 
     df = pd.DataFrame.from_records(data['Scores'])
     df.to_csv(file_name)
@@ -50,17 +50,18 @@ def get_current_rankings(week, x_hash_header, year_string='current', defense=Fal
     # @param week: Week for ranking query.
     # @param x_hash: added param as x_hash header changes week over week.
     # https://www.lineups.com/nfl-team-rankings
-    
+
     defense_string = "defense/" if defense else ""
-    url = f"https://api.lineups.com/nfl/fetch/teams/team-rankings/{defense_string}{year_string}"
-    
+    # url = f"https://api.lineups.com/nfl/fetch/teams/team-rankings/{defense_string}{year_string}"
+    url = f"https://lineups-v2.vercel.app/api/nfl/fetch/teams/team-rankings/{defense_string}{year_string}?week={week}"
+
     file_name = f"./ranking/week_{week}_defense.csv" if defense else f"./ranking/week_{week}.csv"
     if os.path.isfile(file_name):
         print('return cached data', f"week {week}")
         return pd.read_csv(file_name)
     else:
         print('fetching data', x_hash_header, url)
-    
+
 
     payload={}
     headers = {
@@ -119,7 +120,7 @@ def get_metabet_spread(week, api_key='219f64094f67ed781035f5f7a08840fc'):
     results = []
     for game in data['results']:
         spread = np.mean([odds['spread'] for odds in game['odds'] if 'spread' in odds])
-        over_under = np.mean([odds['overUnder'] for odds in game['odds'] if 'overUnder' in odds])                 
+        over_under = np.mean([odds['overUnder'] for odds in game['odds'] if 'overUnder' in odds])
         result = {
             'AwayTeam': game['team1Initials'],
             'HomeTeam': game['team2Initials'],
@@ -143,12 +144,12 @@ def get_fantasy_def_points_against(week):
             return data
     else:
         print('fetching data')
-        
+
     url = f"https://fantasy.nfl.com/research/pointsagainst?position=8&statCategory=pointsAgainst&statSeason=2021&statType=seasonPointsAgainst"
     page = urlopen(url)
     soup = BeautifulSoup(page, "html.parser")
     rows = soup.find_all('td', attrs={'class': 'teamNameAndInfo'})
-    
+
     teams = [row.text.replace('vs', '').replace(' DEF', '') for row in rows]
     points = []
     for r in soup.find_all('td', attrs={'class', 'numeric'}):
@@ -163,8 +164,8 @@ def get_fantasy_def_points_against(week):
             'rank': rank,
             'allowed': points[i]
         }
-    
+
     with open(file_name, 'w') as outfile:
         outfile.write(json.dumps(def_map))
-        
+
     return def_map

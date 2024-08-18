@@ -1,5 +1,7 @@
 .ipynb_checkpoints
 *.csv
 __pycache__/
-
+.DS_Store
 ranking/*.json
+data23
+data24
