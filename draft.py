@@ -15,23 +15,17 @@ from draftfast.settings import OptimizerSettings, CustomRule, PlayerPoolSettings
 from nfl_teams import NFL_TEAM_MAP
 import numpy as np
 import pandas as pd
-from odds import get_metabet_spread
-from scipy import stats
+from odds import get_fantasy_def_points_against, get_metabet_spread
+from projection import (
+    calculate_precipitation_factor,
+    calculate_temperature_factor,
+    calculate_wind_factor,
+    cap_projection,
+    compute_team_totals,
+)
 from weather import display_weather_summary, get_nfl_weather
 
-# ============================================================
-# Config
-# ============================================================
-
-DATA_FOLDER = './data26'
-ACTIVE_FOLDER = './active'
-UPLOAD_FOLDER = './upload'
-HISTORY_FOLDER = './history'
-RANKINGS_FILE = './ranking/defense_1.json'
-
-SEASON_START = '09/13/2026'
-WEIGHTED = True
-MAX_SALARY = 9900
+import config
 
 
 def get_most_recently_created_file_with_extension(folder, extension):
@@ -39,7 +33,7 @@ def get_most_recently_created_file_with_extension(folder, extension):
     return max(files, key=lambda x: os.path.getctime(f"{folder}/{x}"))
 
 
-def get_week_relative_to_start(season_start=SEASON_START):
+def get_week_relative_to_start(season_start=config.SEASON_START):
     start = datetime.strptime(season_start, '%m/%d/%Y')
     today = datetime.today()
     num_days = (today - start).days + 1
@@ -47,9 +41,12 @@ def get_week_relative_to_start(season_start=SEASON_START):
 
 
 WEEK = max(get_week_relative_to_start(), 1)
-SALARY_FILE = f"{DATA_FOLDER}/{get_most_recently_created_file_with_extension(DATA_FOLDER, 'csv')}"
-ACTIVE_FILE = f"{ACTIVE_FOLDER}/data.csv"
-UPLOAD_FILE = f"{UPLOAD_FOLDER}/upload.csv"
+SALARY_FILE = f"{config.DATA_FOLDER}/{get_most_recently_created_file_with_extension(config.DATA_FOLDER, 'csv')}"
+ACTIVE_FILE = f"{config.ACTIVE_FOLDER}/data.csv"
+UPLOAD_FILE = f"{config.UPLOAD_FOLDER}/upload.csv"
+
+WEIGHTED = config.WEIGHTED
+MAX_SALARY = config.MAX_SALARY
 
 # ============================================================
 # Load salary data
@@ -59,65 +56,49 @@ df = pd.read_csv(SALARY_FILE, na_values='')
 print('ready', SALARY_FILE, WEEK)
 
 # ============================================================
-# Rankings (optional - proceeds without if file missing)
+# Defense strength: fantasy points against (FPA)
+# Optional - proceeds with zeros if data is unavailable.
 # ============================================================
 
-rankings = {}
-if os.path.isfile(RANKINGS_FILE):
-    try:
-        ranking_df = pd.read_csv(RANKINGS_FILE) if RANKINGS_FILE.endswith('.csv') else pd.read_json(RANKINGS_FILE)
-    except Exception as e:
-        print('Error loading rankings:', e)
-        ranking_df = pd.DataFrame()
-    if not ranking_df.empty and 'team_fk__full_name' in ranking_df.columns:
-        ranking_df['team'] = ranking_df['team_fk__full_name'].apply(lambda x: NFL_TEAM_MAP[x])
-        rankings = {x['team']: x for x in ranking_df.to_dict('records')}
-    else:
-        print('Rankings file loaded but empty or missing expected columns.')
-else:
-    print(f'Rankings file not found: {RANKINGS_FILE}. Proceeding without rankings.')
+fpa_map = {}
+try:
+    fpa_map = get_fantasy_def_points_against(WEEK) or {}
+except Exception as e:
+    print('Error loading FPA data:', e)
+    fpa_map = {}
 
 num_teams = df['Team'].nunique()
 
 # ============================================================
-# Vegas spreads / over-unders -> favor_map, z_map
+# Vegas spreads / over-unders -> favor_map, team_totals
 # ============================================================
 
 spread_df = get_metabet_spread(WEEK)
-
-z_scores = {}
-if 'OverUnder' in spread_df.columns.values:
-    points = list(spread_df['OverUnder'])
-    zs = stats.zscore(points)
-    for i, p in enumerate(points):
-        z_scores[p] = 0 if np.isnan(zs[i]) else zs[i]
 
 # Vegas convention: PointSpread is from the home team's perspective.
 # Negative = home favored, positive = home unfavored.
 # favor_map: positive = team is unfavored, negative = team is favored.
 favor_map = {}
-z_map = {}
 for index, row in spread_df.iterrows():
     home, away = row['HomeTeam'], row['AwayTeam']
     favor_map[home] = row['PointSpread']
     favor_map[away] = -row['PointSpread']
-    if 'OverUnder' in row:
-        z_map[home] = z_scores[row['OverUnder']]
-        z_map[away] = z_scores[row['OverUnder']]
 
 # Team abbreviation aliases used by odds data
 if 'JAX' in favor_map:
     favor_map['JAC'] = favor_map['JAX']
-    z_map['JAC'] = z_map['JAX']
 if 'LVS' in favor_map:
     favor_map['LV'] = favor_map['LVS']
-    z_map['LV'] = z_map['LVS']
+
+# Implied team totals from Vegas: home team total = (O/U - spread) / 2,
+# away team total = (O/U + spread) / 2. favor_map[home] = spread as-is.
+team_totals, avg_team_total = compute_team_totals(spread_df)
 
 # ============================================================
 # Weather
 # ============================================================
 
-weather_df = get_nfl_weather(WEEK - 1)
+weather_df = get_nfl_weather(WEEK)
 
 if not weather_df.empty:
     team_name_to_abbr = {
@@ -140,7 +121,7 @@ if not weather_df.empty:
 set_teams = set(df['Team'])
 SINGLE_GAME = len(set_teams) == 2
 
-MIN_SALARY = 1100 if SINGLE_GAME else 4900
+MIN_SALARY = config.MIN_SALARY_SINGLE if SINGLE_GAME else config.MIN_SALARY_CLASSIC
 
 df['Name'] = df['First Name'] + " " + df['Last Name']
 df['Salary/FPPG'] = df['FPPG'] / df['Salary']
@@ -150,8 +131,7 @@ low_salary_players = list(df[((df['Salary'] < MIN_SALARY)) & (df['Position'] != 
 excluded_players = set([*questionable_players, *low_salary_players])
 
 # Manual re-additions (weekly tuned)
-readd = ['Justin Herbert', 'George Kittle', 'Patrick Taylor Jr.', 'Bailey Zappe', "D'Andre Swift", 'David Montgomery', ]
-for p in readd:
+for p in config.READD:
     excluded_players.discard(p)
 
 questionable_df = df[df['Name'].isin(questionable_players)]
@@ -175,8 +155,8 @@ def name_map(x):
 
 
 start_week = WEEK - 6
-file_names = [f"{HISTORY_FOLDER}/week{week_number}.csv" for week_number in range(start_week, WEEK + 1)
-              if week_number != 18 and os.path.isfile(f"{HISTORY_FOLDER}/week{week_number}.csv")]
+file_names = [f"{config.HISTORY_FOLDER}/week{week_number}.csv" for week_number in range(start_week, WEEK + 1)
+              if week_number != 18 and os.path.isfile(f"{config.HISTORY_FOLDER}/week{week_number}.csv")]
 history_dfs = [pd.read_csv(f, delimiter=";") for f in file_names]
 print(f"Using {len(history_dfs)} weeks of history")
 
@@ -200,7 +180,7 @@ if history_dfs:
 # Injury bonuses
 # ============================================================
 
-INJURY_FACTOR = .12
+INJURY_FACTOR = config.INJURY_FACTOR
 excluded_bonus = defaultdict(lambda: 0)
 injured_qb = defaultdict(lambda: False)
 
@@ -241,14 +221,14 @@ def get_nfl_positions():
 
 
 ACTIVE_RULE_SET = rules.FD_NFL_RULE_SET
-ACTIVE_RULE_SET.salary_max = 60000
+ACTIVE_RULE_SET.salary_max = config.SALARY_MAX
 ACTIVE_RULE_SET.defensive_positions = ['D', 'DEF']
 ACTIVE_RULE_SET.offensive_positions = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'WR/FLEX', 'K', 'MVP'] if SINGLE_GAME else ['QB', 'RB', 'WR', 'TE', 'FLEX', 'WR/FLEX', 'K']
 ACTIVE_RULE_SET.position_limits = get_nfl_positions()
-ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - (200 if SINGLE_GAME else 100)
+ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
 if not SINGLE_GAME:
-    ACTIVE_RULE_SET.max_players_per_team = 9
-ACTIVE_RULE_SET.roster_size = 9 if not SINGLE_GAME else 6
+    ACTIVE_RULE_SET.max_players_per_team = config.MAX_PLAYERS_PER_TEAM_CLASSIC
+ACTIVE_RULE_SET.roster_size = config.ROSTER_SIZE_CLASSIC if not SINGLE_GAME else config.ROSTER_SIZE_SINGLE
 
 ALL_POSITIONS = [*ACTIVE_RULE_SET.defensive_positions, *ACTIVE_RULE_SET.offensive_positions]
 
@@ -278,215 +258,16 @@ def get_weather_for_team(team, weather_df):
     }
 
 
-def calculate_wind_factor(wind_speed, pos):
-    """Wind adjustment factor by position (<1 penalty, >1 bonus, 1 neutral)."""
-    if not wind_speed or wind_speed < 2:
-        return 1.0
-
-    if pos == 'QB':
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 0.97
-        elif wind_speed < 15:
-            return 0.94
-        elif wind_speed < 20:
-            return 0.90
-        else:
-            return 0.85
-    elif pos == 'WR':
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 0.96
-        elif wind_speed < 15:
-            return 0.92
-        elif wind_speed < 20:
-            return 0.87
-        else:
-            return 0.80
-    elif pos == 'TE':
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 0.97
-        elif wind_speed < 15:
-            return 0.94
-        elif wind_speed < 20:
-            return 0.89
-        else:
-            return 0.83
-    elif pos == 'RB':
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 1.02
-        elif wind_speed < 15:
-            return 1.04
-        elif wind_speed < 20:
-            return 1.05
-        else:
-            return 1.06
-    elif pos == 'K':
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 0.98
-        elif wind_speed < 15:
-            return 0.95
-        elif wind_speed < 20:
-            return 0.88
-        else:
-            return 0.75
-    elif pos in ('D', 'MVP'):
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 1.01
-        elif wind_speed < 15:
-            return 1.02
-        elif wind_speed < 20:
-            return 1.03
-        else:
-            return 1.04
-
-    return 1.0
-
-
-def calculate_temperature_factor(temp, pos):
-    """Temperature adjustment factor by position."""
-    if not temp or temp < -10 or temp > 130:
-        return 1.0
-
-    if pos == 'QB':
-        if temp < 20:
-            return 0.96
-        elif temp < 35:
-            return 0.98
-        elif temp < 55:
-            return 0.99
-        elif temp < 75:
-            return 1.0
-        elif temp < 90:
-            return 1.02
-        else:
-            return 1.03
-    elif pos in ['WR', 'TE']:
-        if temp < 20:
-            return 0.97
-        elif temp < 35:
-            return 0.99
-        elif temp < 55:
-            return 0.99
-        elif temp < 75:
-            return 1.0
-        elif temp < 90:
-            return 1.02
-        else:
-            return 1.01
-    elif pos == 'RB':
-        if temp < 20:
-            return 1.02
-        elif temp < 35:
-            return 1.01
-        elif temp < 55:
-            return 1.0
-        elif temp < 75:
-            return 0.99
-        elif temp < 90:
-            return 0.98
-        else:
-            return 0.97
-    elif pos == 'K':
-        if temp < 0:
-            return 0.98
-        elif temp < 20:
-            return 0.99
-        elif temp < 100:
-            return 1.0
-        else:
-            return 0.99
-    elif pos in ('D', 'MVP'):
-        if temp < 35:
-            return 1.02
-        elif temp < 55:
-            return 1.01
-        elif temp < 75:
-            return 1.0
-        elif temp < 90:
-            return 0.98
-        else:
-            return 0.96
-
-    return 1.0
-
-
-def calculate_precipitation_factor(precip_chance, pos):
-    """Precipitation adjustment factor by position."""
-    if not precip_chance or precip_chance < 5:
-        return 1.0
-
-    if pos == 'QB':
-        if precip_chance < 25:
-            return 1.0
-        elif precip_chance < 50:
-            return 0.97
-        elif precip_chance < 75:
-            return 0.94
-        else:
-            return 0.90
-    elif pos in ['WR', 'TE']:
-        if precip_chance < 25:
-            return 1.0
-        elif precip_chance < 50:
-            return 0.96
-        elif precip_chance < 75:
-            return 0.92
-        else:
-            return 0.87
-    elif pos == 'RB':
-        if precip_chance < 25:
-            return 1.0
-        elif precip_chance < 50:
-            return 1.03
-        elif precip_chance < 75:
-            return 1.05
-        else:
-            return 1.07
-    elif pos == 'K':
-        if precip_chance < 25:
-            return 1.0
-        elif precip_chance < 50:
-            return 0.98
-        elif precip_chance < 75:
-            return 0.95
-        else:
-            return 0.90
-    elif pos in ('D', 'MVP'):
-        if precip_chance < 25:
-            return 1.0
-        elif precip_chance < 50:
-            return 1.02
-        elif precip_chance < 75:
-            return 1.04
-        else:
-            return 1.06
-
-    return 1.0
-
-
 # ============================================================
 # Build player pool + adjusted projections
 # ============================================================
 
-FAVOR_DIVISION = 4
-AVERAGE_WEIGHT = .5
+AVERAGE_WEIGHT = config.AVERAGE_WEIGHT
 MIN_PLAYED = min(int(WEEK * 0.4), 2)
-MIN_QB_SALARY = 1000 if SINGLE_GAME else 6400
-MIN_SCORE = 7
-MAX_SCORE = 27
-INJURED_QB_BONUS = 1.25
-HOME_BONUS = .3
+MIN_QB_SALARY = config.MIN_QB_SALARY_SINGLE if SINGLE_GAME else config.MIN_QB_SALARY_CLASSIC
+MIN_SCORE = config.MIN_SCORE
+MAX_SCORE = config.MAX_SCORE
+INJURED_QB_BONUS = config.INJURED_QB_BONUS
 
 historic_data_used = 0
 
@@ -536,27 +317,30 @@ def filter_mvps(mvps, players, starter_map):
     return filtered_mvps
 
 
-def calculate_home_bonus(p):
-    """Home/away bonus."""
-    teams = p.matchup.split('@')
-    is_home = p.team == teams[1]
-    return HOME_BONUS if is_home else -HOME_BONUS
-
-
-def calculate_overunder_bonus(p, point_bonus):
-    """Over/under bonus; defenses penalized 3x in high-scoring games."""
-    if not point_bonus:
-        return 0
+def calculate_team_total_bonus(p, opponent):
+    """
+    Vegas implied team-total bonus. A player's projection scales with how
+    far their team's implied total deviates from the slate average. Defenses
+    and MVPs use the opponent's total (they score better against weak offenses).
+    """
     if p.pos in ['D', 'MVP']:
-        return -point_bonus * 3.0
-    return point_bonus * 1.5
+        total = team_totals.get(opponent, avg_team_total)
+        deviation = avg_team_total - total  # low opponent total = good for D
+        return deviation * config.DEFENSE_TOTAL_WEIGHT
+    total = team_totals.get(p.team, avg_team_total)
+    deviation = total - avg_team_total
+    return deviation * config.OFFENSE_TOTAL_WEIGHT
 
 
-def calculate_ranking_bonus(p, opponent):
-    """Ranking-based bonus (0 when no rankings loaded)."""
-    current_rank = rankings.get(p.team, {}).get('points_rank_def', 0)
-    opp_rank = (num_teams - rankings.get(opponent, {}).get('offensive_yards_rank', 0))
-    return (opp_rank - current_rank) / num_teams
+def calculate_fpa_bonus(p, opponent):
+    """Fantasy-points-against bonus: boost players facing weak defenses."""
+    if p.pos in ['D', 'MVP']:
+        return 0
+    entry = fpa_map.get(opponent, {})
+    allowed = entry.get('allowed') if isinstance(entry, dict) else None
+    if not allowed:
+        return 0
+    return (float(allowed) - 20.0) * config.FPA_WEIGHT  # 20 = rough league-average FD points allowed
 
 
 def calculate_injury_bonuses(p, opponent):
@@ -606,7 +390,7 @@ def calculate_adjusted_projection(p):
         return p.proj
 
     # Kickers and cheap non-defense players just blend with historical average
-    if p.pos == 'K' or (p.cost <= 4200 and p.pos != 'D'):
+    if p.pos == 'K' or (p.cost <= config.LOW_SALARY_SKIP and p.pos != 'D'):
         return get_blended_projection(p, name_map(p.name))
 
     base_score = get_blended_projection(p, name_map(p.name) if p.pos not in ['D', 'MVP'] else p.team.lower())
@@ -616,20 +400,11 @@ def calculate_adjusted_projection(p):
 
     matchup_bonus = 0
 
-    # Over/under (game total) adjustment
-    point_bonus = z_map.get(p.team, 0)
-    matchup_bonus += calculate_overunder_bonus(p, point_bonus)
+    # Vegas implied team total (encodes both spread and game total)
+    matchup_bonus += calculate_team_total_bonus(p, opponent)
 
-    # Spread adjustment (dampened in high-scoring games)
-    spread_bonus = -favor_map.get(p.team, 0) / FAVOR_DIVISION
-    spread_weight = 1.0 - (point_bonus * (0.5 if p.pos in ['D', 'MVP'] else 0.4))
-    matchup_bonus += spread_bonus * spread_weight
-
-    # Home field advantage
-    matchup_bonus += calculate_home_bonus(p)
-
-    # Opponent defense ranking
-    matchup_bonus += calculate_ranking_bonus(p, opponent)
+    # Fantasy points allowed by opponent's defense
+    matchup_bonus += calculate_fpa_bonus(p, opponent)
 
     # Injury adjustments
     matchup_bonus += calculate_injury_bonuses(p, opponent)
@@ -644,17 +419,20 @@ def calculate_adjusted_projection(p):
     if combined_weather_factor != 1.0:
         p.kv_store['weather_factor'] = combined_weather_factor
         weather_bonus = base_score * (combined_weather_factor - 1.0)
-        max_weather_bonus = base_score * 0.20
+        max_weather_bonus = base_score * config.MAX_WEATHER_BONUS
         weather_bonus = max(min(weather_bonus, max_weather_bonus), -max_weather_bonus)
         matchup_bonus += weather_bonus
 
     # Apply with safeguards
     if p.pos in ['D', 'MVP'] or base_score >= MIN_SCORE:
-        adjusted_proj = min(base_score + matchup_bonus, MAX_SCORE)
-        adjusted_proj = max(adjusted_proj, base_score * .5)
-        if p.pos == 'D':
-            adjusted_proj = min(adjusted_proj, base_score * 2)
-        return adjusted_proj
+        return cap_projection(
+            base_score + matchup_bonus,
+            base_score,
+            p.pos,
+            max_score=MAX_SCORE,
+            min_proj_multiplier=config.MIN_PROJ_MULTIPLIER,
+            max_def_multiplier=config.MAX_DEF_MULTIPLIER,
+        )
 
     return base_score
 
@@ -705,9 +483,9 @@ for p in players:
     elif p.pos == 'D':
         defenses.append((p.team, p.proj, p.cost, p.proj / p.cost, base_fppg, favor_map.get(p.team, 0), opponent))
     elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY:
-        point_bonus = z_map.get(p.team, 0)
-        favor_bonus = -favor_map.get(p.team, 0) / FAVOR_DIVISION
-        qbs.append((name_map(p.name), p.proj, p.cost, p.proj / p.cost, point_bonus, favor_bonus, base_fppg, opponent))
+        team_total = team_totals.get(p.team, avg_team_total)
+        total_deviation = team_total - avg_team_total
+        qbs.append((name_map(p.name), p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent))
 
 starter_map = build_starter_map(players, questionable_df)
 filtered_mvps = filter_mvps(mvps, players, starter_map)
@@ -736,10 +514,10 @@ if SINGLE_GAME:
 print("\n" + "=" * 105)
 print("SORTED QBs")
 print("=" * 105)
-print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'O/U':>8} {'Spread':>8} {'Opp':>5} {'Base':>8}")
+print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8}")
 print("-" * 105)
-for name, proj, cost, value, ou_bonus, spread_bonus, base_fppg, opp in sorted(qbs, key=lambda x: x[3], reverse=True):
-    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {ou_bonus:>8.2f} {spread_bonus:>8.2f} {opp:>5} {base_fppg:>8.2f}")
+for name, proj, cost, value, team_total, total_deviation, base_fppg, opp in sorted(qbs, key=lambda x: x[3], reverse=True):
+    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f}")
 
 display_weather_summary(weather_df)
 
@@ -747,18 +525,15 @@ display_weather_summary(weather_df)
 # Optimizer
 # ============================================================
 
-LOCKED = []
 if SINGLE_GAME:
-    BANNED = ['Seattle Seahawks (MVP)', 'DeMario Douglas', 'Seattle Seahawks', 'New England Patriots']
+    BANNED = config.BANNED_SINGLE
 else:
-    # LOCKED = ['Justin Herbert']
-    BANNED = ['Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", "Houston Texans", "Travis Etienne Jr.", "Jacksonville Jaguars", 'Tee Higgins']
-BLOCKED_TEAMS = []
+    BANNED = config.BANNED_CLASSIC
+BLOCKED_TEAMS = config.BLOCKED_TEAMS
 
 player_settings = PlayerPoolSettings()
 MIN_PROJ = 0
-min_favored = 10
-constraints = LineupConstraints(locked=LOCKED, banned=BANNED)
+constraints = LineupConstraints(locked=config.LOCKED, banned=BANNED)
 
 
 def block_function(p):
@@ -826,14 +601,14 @@ def get_score(roster):
     return sum([p.proj for p in roster.players])
 
 
-def print_optimized_roster(roster, min_favored_factor):
+def print_optimized_roster(roster):
     """Print the optimized roster as a formatted table."""
     teams_in_roster = {p.team for p in roster.players}
     num_teams_in_roster = len(teams_in_roster)
     max_teams_possible = len(set_teams)
 
     print("\n" + "=" * 120)
-    print(f"OPTIMIZED LINEUP (weighting_factor={min_favored_factor}, total_score={get_score(roster):.2f}, teams={num_teams_in_roster}/{max_teams_possible})\n---")
+    print(f"OPTIMIZED LINEUP (total_score={get_score(roster):.2f}, teams={num_teams_in_roster}/{max_teams_possible})\n---")
 
     position_order = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'D': 4, 'MVP': 5, 'FLEX': 6}
 
@@ -891,7 +666,7 @@ roster = run(
 )
 
 if roster:
-    print_optimized_roster(roster, min_favored)
+    print_optimized_roster(roster)
     current_score = get_score(roster)
     if not best_score or current_score > best_score:
         best_score = current_score

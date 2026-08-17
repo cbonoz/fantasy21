@@ -13,6 +13,15 @@ Weekly FanDuel NFL lineup optimizer. `draft.py` ingests the newest salary CSV fr
    Optionally in Jupyter: `uv run jupyter lab` and open `draft.py`.
 4. The final lineup is printed as a table and written to `upload/upload.csv` in FanDuel's template column order.
 
+### How projections are weighted
+
+Weekly tuning lives in `config.py`, not `draft.py`. The core signal is the **Vegas implied team total** (`O/U` ± spread): a player's projection scales by how far their team's total deviates from the slate average (`OFFENSE_TOTAL_WEIGHT`), and defenses by how low the *opponent's* implied total is (`DEFENSE_TOTAL_WEIGHT`). Fantasy-points-allowed data (`FPA_WEIGHT`), injury context, and weather add smaller adjustments on top. Everything is clamped by safety caps (`MAX_SCORE`, `MIN_PROJ_MULTIPLIER`, `MAX_DEF_MULTIPLIER`).
+
+The pure projection math lives in `projection.py` so it can be unit-tested:
+```
+uv run pytest
+```
+
 ### Dependency management
 
 This project uses [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`). Install deps with `uv sync` and add new ones with `uv add <package>`.
