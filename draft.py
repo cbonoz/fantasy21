@@ -1,5 +1,5 @@
 # FanDuel NFL lineup optimizer
-# Run headless with: poetry run python draft.py
+# Run headless with: uv run python draft.py
 
 import copy
 import math
@@ -751,7 +751,8 @@ LOCKED = []
 if SINGLE_GAME:
     BANNED = ['Seattle Seahawks (MVP)', 'DeMario Douglas', 'Seattle Seahawks', 'New England Patriots']
 else:
-    BANNED = ['Sam Darnold', 'Tyler Higbee', 'AJ Barner', "Lil'Jordan Humphrey", "Stefon Diggs"]
+    # LOCKED = ['Justin Herbert']
+    BANNED = ['Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", "Houston Texans", "Travis Etienne Jr.", "Jacksonville Jaguars", 'Tee Higgins']
 BLOCKED_TEAMS = []
 
 player_settings = PlayerPoolSettings()
