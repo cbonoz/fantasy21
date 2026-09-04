@@ -67,8 +67,9 @@ READD = [
     "D'Andre Swift", 'David Montgomery',
 ]
 BANNED_CLASSIC = [
-    'Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", 'Jaylen Warren', "Amon-Ra St. Brown", 'Hollywood Brown',
-    'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
+#   'Pittsburgh Steelers', 'Jalen Coker', 'Kyler Murray',
+#     'Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", 'Jaylen Warren', "Amon-Ra St. Brown", 'Hollywood Brown',
+#     'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
 ]
 BANNED_SINGLE = [
     'Seattle Seahawks (MVP)', 'DeMario Douglas', 'Seattle Seahawks', 'New England Patriots',
