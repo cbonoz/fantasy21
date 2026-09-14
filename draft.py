@@ -33,7 +33,7 @@ import config
 
 def get_most_recently_created_file_with_extension(folder, extension):
     files = [f for f in os.listdir(folder) if f.endswith(extension)]
-    return max(files, key=lambda x: os.path.getctime(f"{folder}/{x}"))
+    return max(files, key=lambda x: os.path.getmtime(f"{folder}/{x}"))
 
 
 def get_week_relative_to_start(season_start=config.SEASON_START):
@@ -142,19 +142,6 @@ df = df[~df['Name'].isin(excluded_players)]
 # Historical averages (nflverse prior-week FanDuel points)
 # ============================================================
 
-REPLACE_MAP = {
-    'LA': 'Los Angeles',
-    '.': '',
-}
-
-
-def name_map(x):
-    result = ' '.join(x.split(', ')[::-1])
-    for k in REPLACE_MAP:
-        result = result.replace(k, REPLACE_MAP[k])
-    return result
-
-
 historic_averages = {}
 try:
     historic_averages = compute_history(WEEK) or {}
@@ -242,9 +229,6 @@ if not SINGLE_GAME:
 ACTIVE_RULE_SET.roster_size = config.ROSTER_SIZE_CLASSIC if not SINGLE_GAME else config.ROSTER_SIZE_SINGLE
 
 ALL_POSITIONS = [*ACTIVE_RULE_SET.defensive_positions, *ACTIVE_RULE_SET.offensive_positions]
-
-m_score = df.groupby(['Position'])['FPPG'].mean().to_dict()
-m_score['DEF'] = m_score['D']
 
 # ============================================================
 # Weather adjustment factors
@@ -414,6 +398,14 @@ if not weather_df.empty:
                 weather_factor_map[(team, pos)] = combined_factor
 
 
+def get_opponent(p):
+    """Opponent team abbreviation from a player's 'AWAY@HOME' matchup."""
+    if not p.matchup:
+        return 'N/A'
+    teams = p.matchup.split('@')
+    return teams[0].strip() if p.team == teams[1].strip() else teams[1].strip()
+
+
 def calculate_adjusted_projection(p):
     """Weighted projection: base blended with history/Sleeper, adjusted by matchup factors."""
     if not WEIGHTED:
@@ -432,8 +424,7 @@ def calculate_adjusted_projection(p):
     if sleeper_pts is not None:
         base_score = blend_projections(base_score, sleeper_pts, config.SLEEPER_WEIGHT)
 
-    teams = p.matchup.split('@')
-    opponent = teams[0] if p.team == teams[1] else teams[1]
+    opponent = get_opponent(p)
 
     matchup_bonus = 0
 
@@ -477,7 +468,6 @@ def calculate_adjusted_projection(p):
 players = salary_download.generate_players_from_csvs(salary_file_location=ACTIVE_FILE, game=rules.FAN_DUEL)
 
 for p in players:
-    p.average_score = m_score[p.pos if p.pos in m_score else p.pos.replace('MVP', 'D')]
     p.proj = calculate_adjusted_projection(p)
     p.kv_store['adjusted_proj'] = p.proj
 
@@ -510,11 +500,7 @@ mvps = []
 
 for p in players:
     base_fppg = float(p.kv_store.get('FPPG') or 0)
-    if p.matchup:
-        teams = p.matchup.split('@')
-        opponent = teams[0].strip() if p.team == teams[1].strip() else teams[1].strip()
-    else:
-        opponent = 'N/A'
+    opponent = get_opponent(p)
 
     if p.pos == 'MVP':
         mvps.append((p.name, p.proj, p.cost, p.proj / p.cost, p.pos, base_fppg, opponent))
@@ -523,7 +509,7 @@ for p in players:
     elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
-        qbs.append((name_map(p.name), p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, p.team))
+        qbs.append((p.name, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, p.team))
 
 starter_map = build_starter_map(players, questionable_df)
 filtered_mvps = filter_mvps(mvps, players, starter_map)
@@ -696,11 +682,7 @@ def print_optimized_roster(roster):
     for p in roster.players:
         base_fppg = _safe_float(p.kv_store.get('FPPG'))
         salary = int(p.cost)
-        if p.matchup:
-            teams = p.matchup.split('@')
-            opponent = teams[0].strip() if p.team == teams[1].strip() else teams[1].strip()
-        else:
-            opponent = 'N/A'
+        opponent = get_opponent(p)
         spread = favor_map.get(p.team, 0)
         total_salary += salary
         weather_factor = _safe_float(p.kv_store.get('weather_factor'), 1.0)
@@ -747,7 +729,7 @@ def calculate_diversity_score(roster):
     if not roster or not roster.players:
         return {'overall_score': 0, 'team_diversity': 0, 'position_diversity': 0}
 
-    non_defense_players = [p for p in roster.players if p.pos != 'DEF']
+    non_defense_players = [p for p in roster.players if p.pos not in ('D', 'DEF')]
     if not non_defense_players:
         return {'overall_score': 0, 'team_diversity': 0, 'position_diversity': 0}
 
@@ -832,32 +814,31 @@ if roster and not SINGLE_GAME:
 # Write upload CSV in FanDuel template column order
 # ============================================================
 
-ORDERED_COLS = ['QB', 'RB', 'RB', 'WR', 'WR', 'WR', 'TE', 'FLEX', 'DEF']
+if roster:
+    ORDERED_COLS = ['QB', 'RB', 'RB', 'WR', 'WR', 'WR', 'TE', 'FLEX', 'DEF']
 
+    def get_match_names(col):
+        if col == 'DEF':
+            return ['D']
+        elif col == 'FLEX':
+            return ['RB', 'WR']
+        return [col]
 
-def get_match_names(col):
-    if col == 'DEF':
-        return ['D']
-    elif col == 'FLEX':
-        return ['RB', 'WR']
-    return [col]
+    headers = []
+    player_names = []
+    roster_copy = roster.players.copy()
+    for c in ORDERED_COLS:
+        headers.append(c)
+        match_names = get_match_names(c)
+        for r in roster_copy:
+            if r.pos in match_names:
+                player_names.append(f"{r.kv_store['Id']}:{r.name}")
+                roster_copy.remove(r)
+                break
 
-
-headers = []
-player_names = []
-roster_copy = roster.players.copy()
-for c in ORDERED_COLS:
-    headers.append(c)
-    match_names = get_match_names(c)
-    for r in roster_copy:
-        if r.pos in match_names:
-            player_names.append(f"{r.kv_store['Id']}:{r.name}")
-            roster_copy.remove(r)
-            break
-
-with open(UPLOAD_FILE, 'w') as f:
-    f.write(','.join(headers))
-    f.write('\n')
-    f.write(','.join(player_names))
+    with open(UPLOAD_FILE, 'w') as f:
+        f.write(','.join(headers))
+        f.write('\n')
+        f.write(','.join(player_names))
 
 print('done')

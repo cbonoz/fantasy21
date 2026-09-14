@@ -6,6 +6,8 @@ import numpy as np
 from bs4 import BeautifulSoup
 from datetime import datetime
 
+import config
+
 def parse_weather_data(html_content):
     """Parse HTML content from NFLWeather.com and extract weather data for each game."""
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -181,19 +183,19 @@ def get_weather_from_action_network():
         return pd.DataFrame()
 
 
-def get_nfl_weather(week=None, season=2025):
+def get_nfl_weather(week=None, season=None):
     """
     Fetch weather data from NFLWeather.com for a given week.
     Falls back to Action Network API if primary source fails.
 
     @param week: NFL week number (1-18 for regular season, or wild-card, etc.)
-    @param season: NFL season year
+    @param season: NFL season year (defaults to config season)
     @return: DataFrame with weather data for each matchup
     """
+    if season is None:
+        season = int(config.SEASON_START.split('/')[-1])
 
     if week is None:
-        # Auto-detect current week
-        from datetime import datetime
         season_start = datetime(season, 9, 1)
         today = datetime.today()
         days_elapsed = (today - season_start).days + 1
@@ -265,98 +267,6 @@ def get_nfl_weather(week=None, season=2025):
             print(f"Saved weather data to {cache_file}")
         
         return df
-
-
-def apply_weather_adjustments(players_df, weather_df, weather_factors=None):
-    """
-    Apply weather-based adjustments to player projections.
-
-    @param players_df: DataFrame with player data (must have 'team' or 'Team' column)
-    @param weather_df: DataFrame with weather data from get_nfl_weather()
-    @param weather_factors: Dict with adjustment factors for different conditions
-    @return: players_df with new 'weather_factor' column
-    """
-
-    if weather_df.empty:
-        print("No weather data available, skipping adjustments")
-        players_df['weather_factor'] = 1.0
-        return players_df
-
-    # Default weather impact factors
-    if weather_factors is None:
-        weather_factors = {
-            'temperature': {
-                'cold': (0, 40, 0.98),  # (min_temp, max_temp, factor)
-                'cool': (40, 55, 0.99),
-                'moderate': (55, 75, 1.0),
-                'warm': (75, 90, 1.01),
-                'hot': (90, 110, 1.02)
-            },
-            'wind': {
-                'calm': (0, 5, 1.0),
-                'light': (5, 10, 0.98),
-                'moderate': (10, 15, 0.96),
-                'strong': (15, 20, 0.93),
-                'very_strong': (20, 100, 0.90)
-            },
-            'precipitation': {
-                'none': (0, 20, 1.0),
-                'light': (20, 50, 0.97),
-                'moderate': (50, 80, 0.95),
-                'heavy': (80, 100, 0.92)
-            }
-        }
-
-    # Find player's team in matchups
-    team_col = 'Team' if 'Team' in players_df.columns else 'team'
-
-    # Create weather factor column
-    weather_factors_list = []
-
-    for idx, player in players_df.iterrows():
-        player_team = player[team_col]
-
-        # Find matching game
-        game = weather_df[
-            (weather_df['away_team'] == player_team) |
-            (weather_df['home_team'] == player_team)
-        ]
-
-        if game.empty:
-            weather_factors_list.append(1.0)
-            continue
-
-        game = game.iloc[0]
-        factor = 1.0
-
-        # Apply temperature adjustment
-        if pd.notna(game['temperature']):
-            temp = game['temperature']
-            for condition, (min_t, max_t, adj) in weather_factors['temperature'].items():
-                if min_t <= temp < max_t:
-                    factor *= adj
-                    break
-
-        # Apply wind adjustment
-        if pd.notna(game['wind_speed']):
-            wind = game['wind_speed']
-            for condition, (min_w, max_w, adj) in weather_factors['wind'].items():
-                if min_w <= wind < max_w:
-                    factor *= adj
-                    break
-
-        # Apply precipitation adjustment
-        if pd.notna(game['precipitation_chance']):
-            precip = game['precipitation_chance']
-            for condition, (min_p, max_p, adj) in weather_factors['precipitation'].items():
-                if min_p <= precip < max_p:
-                    factor *= adj
-                    break
-
-        weather_factors_list.append(factor)
-
-    players_df['weather_factor'] = weather_factors_list
-    return players_df
 
 
 def display_weather_summary(weather_df):

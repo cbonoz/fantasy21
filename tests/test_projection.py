@@ -2,10 +2,13 @@ import pandas as pd
 import pytest
 
 from projection import (
+    blend_projections,
     calculate_precipitation_factor,
     calculate_temperature_factor,
     calculate_wind_factor,
     cap_projection,
+    compute_defense_fd_points,
+    compute_fd_points,
     compute_team_totals,
 )
 
@@ -95,3 +98,44 @@ class TestCapProjection:
 
     def test_within_bounds_unchanged(self):
         assert cap_projection(21.0, 20.0, 'QB') == 21.0
+
+
+class TestComputeFdPoints:
+    def test_qb(self):
+        stats = {'passing_yards': 300, 'passing_tds': 3, 'rushing_yards': 20,
+                 'rushing_tds': 0, 'passing_interceptions': 1, 'fumbles_lost_total': 0}
+        assert compute_fd_points(stats, 'QB') == pytest.approx(25.0)
+
+    def test_skill_position(self):
+        stats = {'rushing_yards': 100, 'rushing_tds': 1, 'receiving_yards': 30,
+                 'receiving_tds': 1, 'fumbles_lost_total': 0}
+        assert compute_fd_points(stats, 'RB') == pytest.approx(25.0)
+
+    def test_kicker_distance_buckets(self):
+        stats = {'fg_made_20_29': 1, 'fg_made_40_49': 1, 'fg_made_50_59': 1, 'pat_made': 2}
+        assert compute_fd_points(stats, 'K') == pytest.approx(3 + 4 + 5 + 2)
+
+    def test_missing_fields_default_zero(self):
+        assert compute_fd_points({}, 'QB') == 0.0
+
+
+class TestComputeDefenseFdPoints:
+    def test_big_play_scoring(self):
+        stats = {'def_tds': 1, 'def_interceptions': 2, 'def_fumbles_forced': 1,
+                 'def_sacks': 3, 'def_safeties': 0, 'fumble_recovery_tds': 0}
+        assert compute_defense_fd_points(stats) == pytest.approx(15.0)
+
+    def test_empty(self):
+        assert compute_defense_fd_points({}) == 0.0
+
+
+class TestBlendProjections:
+    def test_weighted_blend(self):
+        assert blend_projections(20.0, 10.0, 0.3) == pytest.approx(17.0)
+
+    def test_missing_secondary_returns_primary(self):
+        assert blend_projections(20.0, None) == 20.0
+        assert blend_projections(20.0, 0.0) == 20.0
+
+    def test_missing_primary_returns_secondary(self):
+        assert blend_projections(None, 10.0) == 10.0

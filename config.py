@@ -8,8 +8,6 @@
 DATA_FOLDER = './data26'
 ACTIVE_FOLDER = './active'
 UPLOAD_FOLDER = './upload'
-HISTORY_FOLDER = './history'
-FPA_FILE = './ranking/defense_1.json'
 CACHE_FOLDER = './ranking'
 
 # ============================================================
@@ -85,13 +83,12 @@ BANNED_CLASSIC = ['Cam Skattebo', 'Patrick Mahomes', 'Tucker Kraft', 'Jahmyr Gib
 #     'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
 ]
 BANNED_SINGLE = [
-  'Justin Fields', 'Tyquan Thornton'
+  'Justin Fields', 'Jonah Coleman', 'Tyquan Thornton', "Lil'Jordan Humphrey", "Rashee Rice", 'Patrick Mahomes (MVP)', 'Denver Broncos', 'Marvin Mims Jr.', 'Rashee Rice (MVP)'
 #   'Jaxon Smith-Njigba (MVP)',  'Puka Nacua (MVP)', 'George Kittle (MVP)', 'Jaxon Smith-Njigba', 'A.J. Brown (MVP)', 'New England Patriots',
 #   'Christian McCaffrey (MVP)', 'Jake Tonges', 'Tyler Higbee', 'Kyren Williams (MVP)', 'Terrance Ferguson', 'Mac Jones', 'Tyler Higbee (MVP)',
 #  'Jameis Winston', 'Cam Skattebo', 'Cam Skattebo (MVP)', 'J.K. Dobbins', 'Javonte Williams (MVP)', 'George Pickens', 'Justin Fields (MVP)',  'Tyrone Tracy Jr. (MVP)', 'Jameis Winston (MVP)', 'George Pickens (MVP)', 'Patrick Mahomes (MVP)', 'Justin Fields'
     #  'Jaxon Smith-Njigba (MVP)', 'Seattle Seahawks', 'Tommy DeVito', 'Seattle Seahawks (MVP)', 'Jaxon Smith-Njigba'
 ]
 
-LOCKED = ['Jaylen Waddle'
-]
+LOCKED = ['Jaylen Waddle']
 BLOCKED_TEAMS = []
