@@ -11,18 +11,21 @@ from draftfast import rules
 from draftfast.csv_parse import salary_download
 from draftfast.lineup_constraints import LineupConstraints
 from draftfast.optimize import run
-from draftfast.settings import OptimizerSettings, CustomRule, PlayerPoolSettings
-from nfl_teams import NFL_TEAM_MAP
+from draftfast.settings import OptimizerSettings, CustomRule
+from nfl_teams import normalize_player_name, normalize_team_abbr
 import numpy as np
 import pandas as pd
-from odds import get_fantasy_def_points_against, get_metabet_spread
+from odds import get_metabet_spread
 from projection import (
     calculate_precipitation_factor,
     calculate_temperature_factor,
     calculate_wind_factor,
+    blend_projections,
     cap_projection,
     compute_team_totals,
 )
+from nflverse import compute_fpa_map, compute_history, compute_qb_snap_share_map
+from sleeper import build_projection_map
 from weather import display_weather_summary, get_nfl_weather
 
 import config
@@ -62,12 +65,10 @@ print('ready', SALARY_FILE, WEEK)
 
 fpa_map = {}
 try:
-    fpa_map = get_fantasy_def_points_against(WEEK) or {}
+    fpa_map = compute_fpa_map(WEEK) or {}
 except Exception as e:
     print('Error loading FPA data:', e)
     fpa_map = {}
-
-num_teams = df['Team'].nunique()
 
 # ============================================================
 # Vegas spreads / over-unders -> favor_map, team_totals
@@ -138,7 +139,7 @@ questionable_df = df[df['Name'].isin(questionable_players)]
 df = df[~df['Name'].isin(excluded_players)]
 
 # ============================================================
-# Historical averages (momentum weighting)
+# Historical averages (nflverse prior-week FanDuel points)
 # ============================================================
 
 REPLACE_MAP = {
@@ -154,27 +155,37 @@ def name_map(x):
     return result
 
 
-start_week = WEEK - 6
-file_names = [f"{config.HISTORY_FOLDER}/week{week_number}.csv" for week_number in range(start_week, WEEK + 1)
-              if week_number != 18 and os.path.isfile(f"{config.HISTORY_FOLDER}/week{week_number}.csv")]
-history_dfs = [pd.read_csv(f, delimiter=";") for f in file_names]
-print(f"Using {len(history_dfs)} weeks of history")
-
 historic_averages = {}
-if history_dfs:
-    historic_data = pd.concat(history_dfs)
-    historic_data['Name'] = historic_data['Name'].apply(name_map)
-    team_data = historic_data[historic_data['Pos'] == 'Def']
+try:
+    historic_averages = compute_history(WEEK) or {}
+    print(f"Using {len(historic_averages)} nflverse history entries")
+except Exception as e:
+    print('Error loading nflverse history:', e)
+    historic_averages = {}
 
-    historic_averages = historic_data.groupby("Name").mean()['FD points'].to_dict()
-    historic_averages['Patrick Mahomes'] = historic_averages['Patrick Mahomes II']
-    historic_averages['Darrell Henderson Jr'] = historic_averages['Darrell Henderson']
+# ============================================================
+# Sleeper projections (independent weekly projection source)
+# ============================================================
 
-    team_averages = team_data.groupby("Team").mean()['FD points'].to_dict()
-    for short, full in [('gb', 'gnb'), ('kc', 'kan'), ('ne', 'nwe'), ('tb', 'tam'),
-                        ('lv', 'lvr'), ('no', 'nor'), ('sf', 'sfo')]:
-        team_averages[short] = team_averages.get(full)
-    historic_averages.update(team_averages)
+sleeper_proj_map = {}
+try:
+    sleeper_proj_map = build_projection_map(WEEK) or {}
+    print(f"Loaded {len(sleeper_proj_map)} Sleeper projections")
+except Exception as e:
+    print('Error loading Sleeper projections:', e)
+    sleeper_proj_map = {}
+
+# ============================================================
+# QB snap-share map (backup detection)
+# ============================================================
+
+qb_snap_share_map = {}
+if config.USE_SNAP_BACKUP:
+    try:
+        qb_snap_share_map = compute_qb_snap_share_map(WEEK) or {}
+    except Exception as e:
+        print('Error loading snap counts:', e)
+        qb_snap_share_map = {}
 
 # ============================================================
 # Injury bonuses
@@ -269,8 +280,6 @@ MIN_SCORE = config.MIN_SCORE
 MAX_SCORE = config.MAX_SCORE
 INJURED_QB_BONUS = config.INJURED_QB_BONUS
 
-historic_data_used = 0
-
 
 def build_starter_map(players, questionable_df):
     """Map (team, pos) -> (starter_name, starter_fppg, is_injured) for QB/RB/WR/TE."""
@@ -296,18 +305,14 @@ def base_position(p):
 
 def filter_mvps(mvps, players, starter_map):
     """Include MVP candidates who are starters, or backups whose starter is injured."""
+    players_by_name = {p.name: p for p in players}
     filtered_mvps = []
     for name, proj, cost, value, pos, base_fppg, opponent in sorted(mvps, key=lambda x: x[3], reverse=True):
         base_name = name.replace(' (MVP)', '')
-        player_games = 0
-        player_team = None
-        player_pos = None
-        for p in players:
-            if p.name == base_name:
-                player_games = int(float(p.kv_store.get('Played', 0)))
-                player_team = p.team
-                player_pos = p.pos
-                break
+        p = players_by_name.get(base_name)
+        player_games = int(float(p.kv_store.get('Played', 0))) if p else 0
+        player_team = p.team if p else None
+        player_pos = p.pos if p else None
 
         status = "Starter"
         starter_name = None
@@ -347,7 +352,7 @@ def calculate_fpa_bonus(p, opponent):
     if p.pos in ['D', 'MVP']:
         return 0
     entry = fpa_map.get(opponent, {})
-    allowed = entry.get('allowed') if isinstance(entry, dict) else None
+    allowed = entry.get(p.pos) if isinstance(entry, dict) else None
     if not allowed:
         return 0
     return (float(allowed) - 20.0) * config.FPA_WEIGHT  # 20 = rough league-average FD points allowed
@@ -371,12 +376,25 @@ def calculate_injury_bonuses(p, opponent):
 
 def get_blended_projection(p, history_key):
     """Blend current projection with historical average when available."""
-    global historic_data_used
     history_value = historic_averages.get(history_key)
     if history_value:
-        historic_data_used += 1
         return AVERAGE_WEIGHT * p.proj + (1 - AVERAGE_WEIGHT) * history_value
     return p.proj
+
+
+def history_key_for(p):
+    """Normalized lookup key into nflverse history averages."""
+    if p.pos in ['D', 'MVP']:
+        return normalize_team_abbr(p.team).lower()
+    return normalize_player_name(p.name)
+
+
+def sleeper_projection_for(p):
+    """Sleeper pts_std for a player, keyed by base position/name."""
+    pos = base_position(p)
+    if pos == 'D':
+        return None
+    return sleeper_proj_map.get((p.team, pos, normalize_player_name(p.name.replace(' (MVP)', ''))))
 
 
 weather_factor_map = {}
@@ -384,6 +402,8 @@ if not weather_df.empty:
     for team in set(list(weather_df['away_team'].dropna()) + list(weather_df['home_team'].dropna())):
         weather_info = get_weather_for_team(team, weather_df)
         if weather_info:
+            if normalize_team_abbr(team) in config.ROOFED_TEAMS:
+                continue
             wind = weather_info.get('wind_speed')
             temp = weather_info.get('temperature')
             precip = weather_info.get('precipitation_chance')
@@ -395,15 +415,22 @@ if not weather_df.empty:
 
 
 def calculate_adjusted_projection(p):
-    """Weighted projection: base blended with history, adjusted by matchup factors."""
+    """Weighted projection: base blended with history/Sleeper, adjusted by matchup factors."""
     if not WEIGHTED:
         return p.proj
 
-    # Kickers and cheap non-defense players just blend with historical average
+    # Kickers and cheap non-defense players just blend with history + Sleeper
     if p.pos == 'K' or (p.cost <= config.LOW_SALARY_SKIP and p.pos != 'D'):
-        return get_blended_projection(p, name_map(p.name))
+        base = get_blended_projection(p, history_key_for(p))
+        sleeper_pts = sleeper_projection_for(p)
+        if sleeper_pts is not None:
+            return blend_projections(base, sleeper_pts, config.SLEEPER_WEIGHT)
+        return base
 
-    base_score = get_blended_projection(p, name_map(p.name) if p.pos not in ['D', 'MVP'] else p.team.lower())
+    base_score = get_blended_projection(p, history_key_for(p))
+    sleeper_pts = sleeper_projection_for(p)
+    if sleeper_pts is not None:
+        base_score = blend_projections(base_score, sleeper_pts, config.SLEEPER_WEIGHT)
 
     teams = p.matchup.split('@')
     opponent = teams[0] if p.team == teams[1] else teams[1]
@@ -537,17 +564,11 @@ for name, proj, cost, value, team_total, total_deviation, base_fppg, opp, team i
 display_weather_summary(weather_df)
 
 # ============================================================
-# Optimizer
+# Optimizer: draftfast weighted optimization
 # ============================================================
 
-if SINGLE_GAME:
-    BANNED = config.BANNED_SINGLE
-else:
-    BANNED = config.BANNED_CLASSIC
+BANNED = config.BANNED_SINGLE if SINGLE_GAME else config.BANNED_CLASSIC
 BLOCKED_TEAMS = config.BLOCKED_TEAMS
-
-player_settings = PlayerPoolSettings()
-MIN_PROJ = 0
 constraints = LineupConstraints(locked=config.LOCKED, banned=BANNED)
 
 
@@ -559,18 +580,26 @@ def block_function(p):
             return True
         # Block backup QBs (incl. MVP variants) whose starter is healthy.
         if base_position(p) == 'QB':
+            base_name = p.name.replace(' (MVP)', '')
             starter_name, _, starter_injured = starter_map.get((p.team, 'QB'), (None, None, False))
-            if starter_name and starter_name != p.name.replace(' (MVP)', '') and not starter_injured:
+            if starter_name is not None and starter_name == base_name:
+                is_backup = False
+            else:
+                is_backup = starter_name is not None
+                if config.USE_SNAP_BACKUP and not is_backup:
+                    share = qb_snap_share_map.get((p.team, normalize_player_name(base_name)))
+                    is_backup = share is not None and share < config.BACKUP_SNAP_THRESHOLD
+            if is_backup and not starter_injured:
                 return True
         return False
     if p.team in BLOCKED_TEAMS:
         return True
     if p.pos == 'D' and p.cost > 5000:
         return True
-    if p.pos == 'QB' and p.cost < MIN_QB_SALARY or p.cost > MAX_SALARY:
+    if (p.pos == 'QB' and p.cost < MIN_QB_SALARY) or p.cost > MAX_SALARY:
         return True
     cost_filter = p.pos != 'QB' and (p.cost > MAX_SALARY or played < 1)
-    return (p.proj < MIN_PROJ and p.pos != 'D') or (p.proj < 10 and p.pos == 'QB') or cost_filter
+    return (p.proj < 0 and p.pos != 'D') or (p.proj < 10 and p.pos == 'QB') or cost_filter
 
 
 def build_optimizer_settings(players, block_function):
@@ -585,10 +614,9 @@ def build_optimizer_settings(players, block_function):
 
     # Single game: only one version (regular or MVP) of each player
     if SINGLE_GAME:
-        player_versions = {}
+        player_versions = defaultdict(list)
         for p in players:
-            base_name = p.name.replace(' (MVP)', '')
-            player_versions.setdefault(base_name, []).append(p)
+            player_versions[p.name.replace(' (MVP)', '')].append(p)
         for base_name, player_group in player_versions.items():
             if len(player_group) > 1:
                 custom_rules.append(
@@ -628,8 +656,19 @@ def build_optimizer_settings(players, block_function):
     return OptimizerSettings(custom_rules=custom_rules, min_teams=3)
 
 
+def optimize_lineup(players):
+    """Run draftfast's weighted optimizer and return the optimal roster."""
+    return run(
+        rule_set=ACTIVE_RULE_SET,
+        player_pool=players,
+        verbose=False,
+        optimizer_settings=build_optimizer_settings(players, block_function),
+        constraints=constraints,
+    )
+
+
 def get_score(roster):
-    return sum([p.proj for p in roster.players])
+    return sum(p.proj for p in roster.players)
 
 
 def _safe_float(value, default=0.0):
@@ -692,25 +731,9 @@ def print_optimized_roster(roster):
     print("-" * 3)
 
 
-best_roster = None
-best_score = 0
-
-opt_settings = build_optimizer_settings(players, block_function)
-roster = run(
-    rule_set=ACTIVE_RULE_SET,
-    player_pool=players,
-    verbose=False,
-    optimizer_settings=opt_settings,
-    constraints=constraints,
-    player_settings=player_settings,
-)
-
+roster = optimize_lineup(players)
 if roster:
     print_optimized_roster(roster)
-    current_score = get_score(roster)
-    if not best_score or current_score > best_score:
-        best_score = current_score
-        best_roster = roster
 else:
     print("No solution")
 
@@ -771,9 +794,9 @@ def calculate_diversity_score(roster):
     }
 
 
-if best_roster and not SINGLE_GAME:
-    diversity = calculate_diversity_score(best_roster)
-    opt_score = get_score(best_roster)
+if roster and not SINGLE_GAME:
+    diversity = calculate_diversity_score(roster)
+    opt_score = get_score(roster)
 
     print("\nROSTER DIVERSITY ANALYSIS")
     print("-" * 8)

@@ -230,3 +230,49 @@ def cap_projection(adjusted_proj, base_score, pos, max_score=27.0,
     if pos == 'D':
         adjusted_proj = min(adjusted_proj, base_score * max_def_multiplier)
     return adjusted_proj
+
+
+def compute_fd_points(stats, position):
+    """Convert an nflverse weekly stat dict to FanDuel fantasy points."""
+    def f(key):
+        try:
+            return float(stats.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    if position == 'QB':
+        return (f('passing_yards') * 0.04 + f('passing_tds') * 4
+                + f('rushing_yards') * 0.1 + f('rushing_tds') * 6
+                - f('passing_interceptions') - f('fumbles_lost_total'))
+    if position in ('RB', 'WR', 'TE'):
+        return (f('rushing_yards') * 0.1 + f('rushing_tds') * 6
+                + f('receiving_yards') * 0.1 + f('receiving_tds') * 6
+                - f('fumbles_lost_total'))
+    if position == 'K':
+        return ((f('fg_made_0_19') + f('fg_made_20_29') + f('fg_made_30_39')) * 3
+                + f('fg_made_40_49') * 4
+                + (f('fg_made_50_59') + f('fg_made_60_')) * 5
+                + f('pat_made'))
+    return 0.0
+
+
+def compute_defense_fd_points(stats):
+    """nflverse defensive stat dict -> FanDuel DST points (big-play component)."""
+    def f(key):
+        try:
+            return float(stats.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return (f('def_tds') * 6 + f('def_interceptions') * 2
+            + f('def_fumbles_forced') * 2 + f('def_sacks')
+            + f('def_safeties') * 2 + f('fumble_recovery_tds') * 6)
+
+
+def blend_projections(primary, secondary, secondary_weight=0.3):
+    """Weighted blend of two projections; missing inputs fall back gracefully."""
+    if secondary is None or secondary <= 0:
+        return primary
+    if primary is None or primary <= 0:
+        return secondary
+    return (1 - secondary_weight) * primary + secondary_weight * secondary

@@ -32,3 +32,19 @@ NFL_TEAM_MAP = {
     "Tennessee Titans": "TEN",
     "Washington Commanders": "WAS"
 }
+
+# Team abbreviations that differ between data sources
+TEAM_ABBR_ALIASES = {
+    'LA': 'LAR', 'SL': 'LAR', 'STL': 'LAR',
+    'JAX': 'JAC',
+    'OAK': 'LV', 'SD': 'LAC',
+}
+
+
+def normalize_team_abbr(abbr):
+    return TEAM_ABBR_ALIASES.get(str(abbr).strip().upper(), str(abbr).strip().upper())
+
+
+def normalize_player_name(name):
+    """Lowercase, strip periods, collapse whitespace: 'J.K. Dobbins' -> 'jk dobbins'."""
+    return ' '.join(str(name).lower().replace('.', '').split())

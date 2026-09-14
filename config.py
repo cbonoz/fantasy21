@@ -10,6 +10,7 @@ ACTIVE_FOLDER = './active'
 UPLOAD_FOLDER = './upload'
 HISTORY_FOLDER = './history'
 FPA_FILE = './ranking/defense_1.json'
+CACHE_FOLDER = './ranking'
 
 # ============================================================
 # Season
@@ -58,6 +59,18 @@ DEFENSE_TOTAL_WEIGHT = 0.60      # proj points per point of opponent-total devia
 FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points
 
 # ============================================================
+# Free data-source blends (nflverse + Sleeper)
+# ============================================================
+
+# Weight on Sleeper's projection vs. the FanDuel/history base
+SLEEPER_WEIGHT = 0.3
+# QB offense-snap share below which a QB is treated as a backup
+BACKUP_SNAP_THRESHOLD = 0.5
+USE_SNAP_BACKUP = True
+# Teams playing in domes / retractable-roof stadiums (weather-immune)
+ROOFED_TEAMS = {'ARI', 'ATL', 'DAL', 'DET', 'HOU', 'IND', 'LAR', 'LV', 'MIN', 'NO'}
+
+# ============================================================
 # Weekly tuning
 # ============================================================
 
@@ -79,15 +92,6 @@ BANNED_SINGLE = [
     #  'Jaxon Smith-Njigba (MVP)', 'Seattle Seahawks', 'Tommy DeVito', 'Seattle Seahawks (MVP)', 'Jaxon Smith-Njigba'
 ]
 
-LOCKED = [
-  'Pat Bryant','Kenneth Walker III'
-  # 'Patrick Mahomes', 'RJ Harvey', 'Isaiah Likely'
-# 'Jaxson Dart', 'Dak Prescott (MVP)'
-#     'Brock Purdy',
-#     'Travis Etienne',
-#    'Davante Adams',
-#    'Jaxson Dart',
-#     'Chase Brown',
-#     'Tennessee Titans',
+LOCKED = ['Jaylen Waddle'
 ]
 BLOCKED_TEAMS = []
