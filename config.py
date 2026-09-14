@@ -25,7 +25,7 @@ MAX_SALARY = 9900
 SALARY_MAX = 60000
 SALARY_MIN_OFFSET = 100          # 200 for single-game slates
 MIN_SALARY_CLASSIC = 4900
-MIN_SALARY_SINGLE = 1100
+MIN_SALARY_SINGLE = 2100
 MIN_QB_SALARY_CLASSIC = 6400
 MIN_QB_SALARY_SINGLE = 1000
 ROSTER_SIZE_CLASSIC = 9
@@ -64,18 +64,30 @@ FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points
 # Players to force into / out of the pool (weekly tuned)
 READD = [
     'Justin Herbert', 'George Kittle', 'Patrick Taylor Jr.', 'Bailey Zappe',
-    "D'Andre Swift", 'David Montgomery',
+    "D'Andre Swift", 'David Montgomery',"Wan'Dale Robinson"
 ]
-BANNED_CLASSIC = ['Amon-Ra St. Brown', "D'Andre Swift", "James Cook III", "Derrick Henry", "Dalton Kincaid"
+BANNED_CLASSIC = ['Cam Skattebo', 'Patrick Mahomes', 'Tucker Kraft', 'Jahmyr Gibbs', 'Rashee Rice'
 #   'Pittsburgh Steelers', 'Jalen Coker', 'Kyler Murray',
 #     'Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", 'Jaylen Warren', "Amon-Ra St. Brown", 'Hollywood Brown',
 #     'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
 ]
 BANNED_SINGLE = [
-    'Seattle Seahawks (MVP)', 'DeMario Douglas', 'Seattle Seahawks', 'New England Patriots',
+  'Justin Fields', 'Tyquan Thornton'
+#   'Jaxon Smith-Njigba (MVP)',  'Puka Nacua (MVP)', 'George Kittle (MVP)', 'Jaxon Smith-Njigba', 'A.J. Brown (MVP)', 'New England Patriots',
+#   'Christian McCaffrey (MVP)', 'Jake Tonges', 'Tyler Higbee', 'Kyren Williams (MVP)', 'Terrance Ferguson', 'Mac Jones', 'Tyler Higbee (MVP)',
+#  'Jameis Winston', 'Cam Skattebo', 'Cam Skattebo (MVP)', 'J.K. Dobbins', 'Javonte Williams (MVP)', 'George Pickens', 'Justin Fields (MVP)',  'Tyrone Tracy Jr. (MVP)', 'Jameis Winston (MVP)', 'George Pickens (MVP)', 'Patrick Mahomes (MVP)', 'Justin Fields'
+    #  'Jaxon Smith-Njigba (MVP)', 'Seattle Seahawks', 'Tommy DeVito', 'Seattle Seahawks (MVP)', 'Jaxon Smith-Njigba'
 ]
 
 LOCKED = [
-    'Tennessee Titans', 'Chase Brown'
+  'Pat Bryant','Kenneth Walker III'
+  # 'Patrick Mahomes', 'RJ Harvey', 'Isaiah Likely'
+# 'Jaxson Dart', 'Dak Prescott (MVP)'
+#     'Brock Purdy',
+#     'Travis Etienne',
+#    'Davante Adams',
+#    'Jaxson Dart',
+#     'Chase Brown',
+#     'Tennessee Titans',
 ]
 BLOCKED_TEAMS = []

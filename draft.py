@@ -287,6 +287,13 @@ def build_starter_map(players, questionable_df):
     return starter_map
 
 
+def base_position(p):
+    """Underlying position of a player; MVP variants report their base position."""
+    if p.pos != 'MVP':
+        return p.pos
+    return p.kv_store.get('base_pos')
+
+
 def filter_mvps(mvps, players, starter_map):
     """Include MVP candidates who are starters, or backups whose starter is injured."""
     filtered_mvps = []
@@ -303,15 +310,18 @@ def filter_mvps(mvps, players, starter_map):
                 break
 
         status = "Starter"
-        is_backup = player_games < MIN_PLAYED
+        starter_name = None
         starter_injured = False
-        if is_backup and player_team and player_pos in ['QB', 'RB', 'WR', 'TE']:
+        if player_team and player_pos in ['QB', 'RB', 'WR', 'TE']:
             starter_name, _, is_injured = starter_map.get((player_team, player_pos), (None, None, False))
-            if is_injured:
-                starter_injured = True
-                status = f"(Starter {starter_name} injured)"
+            if starter_name and starter_name != base_name:
+                status = "Backup"
+                if is_injured:
+                    starter_injured = True
+                    status = f"(Starter {starter_name} injured)"
 
-        if player_games >= MIN_PLAYED or starter_injured:
+        is_starter = not starter_name or starter_name == base_name
+        if is_starter or starter_injured:
             filtered_mvps.append((name, proj, cost, value, pos, base_fppg, player_games, opponent, status))
 
     return filtered_mvps
@@ -454,6 +464,7 @@ if SINGLE_GAME:
         mvp.proj = p.kv_store.get('adjusted_proj', p.proj) * 1.5
         mvp.name = p.name + ' (MVP)'
         mvp.kv_store['base_name'] = p.name
+        mvp.kv_store['base_pos'] = p.pos
         mvp_players.append(mvp)
     players.extend(mvp_players)
 
@@ -485,7 +496,7 @@ for p in players:
     elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
-        qbs.append((name_map(p.name), p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent))
+        qbs.append((name_map(p.name), p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, p.team))
 
 starter_map = build_starter_map(players, questionable_df)
 filtered_mvps = filter_mvps(mvps, players, starter_map)
@@ -514,10 +525,14 @@ if SINGLE_GAME:
 print("\n" + "=" * 105)
 print("SORTED QBs")
 print("=" * 105)
-print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8}")
-print("-" * 105)
-for name, proj, cost, value, team_total, total_deviation, base_fppg, opp in sorted(qbs, key=lambda x: x[3], reverse=True):
-    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f}")
+print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Status':<10}")
+print("-" * 115)
+for name, proj, cost, value, team_total, total_deviation, base_fppg, opp, team in sorted(qbs, key=lambda x: x[3], reverse=True):
+    starter_name, _, starter_injured = starter_map.get((team, 'QB'), (None, None, False))
+    status = "Starter"
+    if starter_name and starter_name != name:
+        status = "Backup" if not starter_injured else f"Starter {starter_name} injured"
+    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f} {status:<10}")
 
 display_weather_summary(weather_df)
 
@@ -540,7 +555,14 @@ def block_function(p):
     store = p.kv_store
     played = int(float(store.get('Played') or 0))
     if SINGLE_GAME:
-        return played < MIN_PLAYED
+        if played < MIN_PLAYED:
+            return True
+        # Block backup QBs (incl. MVP variants) whose starter is healthy.
+        if base_position(p) == 'QB':
+            starter_name, _, starter_injured = starter_map.get((p.team, 'QB'), (None, None, False))
+            if starter_name and starter_name != p.name.replace(' (MVP)', '') and not starter_injured:
+                return True
+        return False
     if p.team in BLOCKED_TEAMS:
         return True
     if p.pos == 'D' and p.cost > 5000:
@@ -576,6 +598,15 @@ def build_optimizer_settings(players, block_function):
                         comparison=lambda sum, a, b: sum(a) <= 1,
                     )
                 )
+
+        # At most 2 QBs total in a single-game lineup, including the MVP.
+        custom_rules.append(
+            CustomRule(
+                group_a=lambda p: base_position(p) == 'QB',
+                group_b=lambda p: False,
+                comparison=lambda sum, a, b: sum(a) <= 2,
+            )
+        )
         return OptimizerSettings(custom_rules=custom_rules, min_teams=2)
 
     # Non-single: at most 1 player per (position, team)
@@ -601,6 +632,15 @@ def get_score(roster):
     return sum([p.proj for p in roster.players])
 
 
+def _safe_float(value, default=0.0):
+    try:
+        if value is None or str(value).strip() == '':
+            return default
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
 def print_optimized_roster(roster):
     """Print the optimized roster as a formatted table."""
     teams_in_roster = {p.team for p in roster.players}
@@ -615,7 +655,7 @@ def print_optimized_roster(roster):
     roster_data = []
     total_salary = 0
     for p in roster.players:
-        base_fppg = float(p.kv_store.get('FPPG', 0))
+        base_fppg = _safe_float(p.kv_store.get('FPPG'))
         salary = int(p.cost)
         if p.matchup:
             teams = p.matchup.split('@')
@@ -624,7 +664,7 @@ def print_optimized_roster(roster):
             opponent = 'N/A'
         spread = favor_map.get(p.team, 0)
         total_salary += salary
-        weather_factor = p.kv_store.get('weather_factor', 1.0)
+        weather_factor = _safe_float(p.kv_store.get('weather_factor'), 1.0)
 
         roster_data.append({
             'Slot': f"{p.pos:5}",
