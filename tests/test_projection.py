@@ -9,6 +9,7 @@ from projection import (
     cap_projection,
     compute_defense_fd_points,
     compute_fd_points,
+    compute_fp_projection,
     compute_team_totals,
 )
 
@@ -139,3 +140,25 @@ class TestBlendProjections:
 
     def test_missing_primary_returns_secondary(self):
         assert blend_projections(None, 10.0) == 10.0
+
+
+class TestComputeFpProjection:
+    def test_qb(self):
+        stats = {'pass_yds': 260, 'pass_tds': 2, 'rush_yds': 20, 'rush_tds': 0,
+                 'pass_ints': 1, 'fl': 0}
+        assert compute_fp_projection('QB', stats) == pytest.approx(10.4 + 8 + 2 - 1)
+
+    def test_skill_non_ppr(self):
+        stats = {'rush_yds': 90, 'rush_tds': 1, 'rec_rec': 5, 'rec_yds': 40,
+                 'rec_tds': 0, 'fl': 0}
+        assert compute_fp_projection('RB', stats) == pytest.approx(9 + 6 + 4)
+
+    def test_te(self):
+        stats = {'rec_rec': 4, 'rec_yds': 50, 'rec_tds': 1, 'fl': 0}
+        assert compute_fp_projection('TE', stats) == pytest.approx(5 + 6)
+
+    def test_kicker(self):
+        assert compute_fp_projection('K', {'fg': 2, 'xpt': 3}) == pytest.approx(9)
+
+    def test_missing_fields(self):
+        assert compute_fp_projection('QB', {}) == 0.0

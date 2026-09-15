@@ -12,6 +12,7 @@ from draftfast.csv_parse import salary_download
 from draftfast.lineup_constraints import LineupConstraints
 from draftfast.optimize import run
 from draftfast.settings import OptimizerSettings, CustomRule
+from fantasypros import build_projection_map as build_fp_projection_map
 from nfl_teams import normalize_player_name, normalize_team_abbr
 import numpy as np
 import pandas as pd
@@ -161,6 +162,18 @@ try:
 except Exception as e:
     print('Error loading Sleeper projections:', e)
     sleeper_proj_map = {}
+
+# ============================================================
+# FantasyPros projections (independent weekly projection source)
+# ============================================================
+
+fp_proj_map = {}
+try:
+    fp_proj_map = build_fp_projection_map(WEEK) or {}
+    print(f"Loaded {len(fp_proj_map)} FantasyPros projections")
+except Exception as e:
+    print('Error loading FantasyPros projections:', e)
+    fp_proj_map = {}
 
 # ============================================================
 # QB snap-share map (backup detection)
@@ -381,6 +394,14 @@ def sleeper_projection_for(p):
     return sleeper_proj_map.get((p.team, pos, normalize_player_name(p.name.replace(' (MVP)', ''))))
 
 
+def fp_projection_for(p):
+    """FantasyPros FanDuel-adjusted projection; defenses keyed by team."""
+    pos = base_position(p)
+    if pos == 'D':
+        return fp_proj_map.get((p.team, 'D', ''))
+    return fp_proj_map.get((p.team, pos, normalize_player_name(p.name.replace(' (MVP)', ''))))
+
+
 weather_factor_map = {}
 if not weather_df.empty:
     for team in set(list(weather_df['away_team'].dropna()) + list(weather_df['home_team'].dropna())):
@@ -411,18 +432,22 @@ def calculate_adjusted_projection(p):
     if not WEIGHTED:
         return p.proj
 
-    # Kickers and cheap non-defense players just blend with history + Sleeper
+    # Kickers and cheap non-defense players just blend with history + projections
     if p.pos == 'K' or (p.cost <= config.LOW_SALARY_SKIP and p.pos != 'D'):
         base = get_blended_projection(p, history_key_for(p))
-        sleeper_pts = sleeper_projection_for(p)
-        if sleeper_pts is not None:
-            return blend_projections(base, sleeper_pts, config.SLEEPER_WEIGHT)
+        for source in (sleeper_projection_for, fp_projection_for):
+            secondary = source(p)
+            if secondary is not None:
+                weight = config.SLEEPER_WEIGHT if source is sleeper_projection_for else config.FANTASYPROS_WEIGHT
+                base = blend_projections(base, secondary, weight)
         return base
 
     base_score = get_blended_projection(p, history_key_for(p))
-    sleeper_pts = sleeper_projection_for(p)
-    if sleeper_pts is not None:
-        base_score = blend_projections(base_score, sleeper_pts, config.SLEEPER_WEIGHT)
+    for source in (sleeper_projection_for, fp_projection_for):
+        secondary = source(p)
+        if secondary is not None:
+            weight = config.SLEEPER_WEIGHT if source is sleeper_projection_for else config.FANTASYPROS_WEIGHT
+            base_score = blend_projections(base_score, secondary, weight)
 
     opponent = get_opponent(p)
 

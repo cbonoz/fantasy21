@@ -62,6 +62,8 @@ FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points
 
 # Weight on Sleeper's projection vs. the FanDuel/history base
 SLEEPER_WEIGHT = 0.3
+# Weight on FantasyPros' weekly projection vs. the base
+FANTASYPROS_WEIGHT = 0.25
 # QB offense-snap share below which a QB is treated as a backup
 BACKUP_SNAP_THRESHOLD = 0.5
 USE_SNAP_BACKUP = True
@@ -77,18 +79,20 @@ READD = [
     'Justin Herbert', 'George Kittle', 'Patrick Taylor Jr.', 'Bailey Zappe',
     "D'Andre Swift", 'David Montgomery',"Wan'Dale Robinson"
 ]
-BANNED_CLASSIC = ['Cam Skattebo', 'Patrick Mahomes', 'Tucker Kraft', 'Jahmyr Gibbs', 'Rashee Rice'
+BANNED_CLASSIC = ['Jared Goff'
 #   'Pittsburgh Steelers', 'Jalen Coker', 'Kyler Murray',
 #     'Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", 'Jaylen Warren', "Amon-Ra St. Brown", 'Hollywood Brown',
 #     'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
 ]
-BANNED_SINGLE = [
-  'Justin Fields', 'Jonah Coleman', 'Tyquan Thornton', "Lil'Jordan Humphrey", "Rashee Rice", 'Patrick Mahomes (MVP)', 'Denver Broncos', 'Marvin Mims Jr.', 'Rashee Rice (MVP)'
+BANNED_SINGLE = ["Rashee Rice", 'Rashee Rice (MVP)', "Lil'Jordan Humphrey", "Marvin Mims Jr.", 'Troy Franklin'
+#   'Justin Fields', 'Jonah Coleman', 'Tyquan Thornton', "Lil'Jordan Humphrey", "Rashee Rice", 'Patrick Mahomes (MVP)', 'Denver Broncos', 'Marvin Mims Jr.', 'Rashee Rice (MVP)'
 #   'Jaxon Smith-Njigba (MVP)',  'Puka Nacua (MVP)', 'George Kittle (MVP)', 'Jaxon Smith-Njigba', 'A.J. Brown (MVP)', 'New England Patriots',
 #   'Christian McCaffrey (MVP)', 'Jake Tonges', 'Tyler Higbee', 'Kyren Williams (MVP)', 'Terrance Ferguson', 'Mac Jones', 'Tyler Higbee (MVP)',
 #  'Jameis Winston', 'Cam Skattebo', 'Cam Skattebo (MVP)', 'J.K. Dobbins', 'Javonte Williams (MVP)', 'George Pickens', 'Justin Fields (MVP)',  'Tyrone Tracy Jr. (MVP)', 'Jameis Winston (MVP)', 'George Pickens (MVP)', 'Patrick Mahomes (MVP)', 'Justin Fields'
     #  'Jaxon Smith-Njigba (MVP)', 'Seattle Seahawks', 'Tommy DeVito', 'Seattle Seahawks (MVP)', 'Jaxon Smith-Njigba'
 ]
 
-LOCKED = ['Jaylen Waddle']
+LOCKED = [
+  'Jaylen Waddle', 'Kenneth Walker III',
+  ]
 BLOCKED_TEAMS = []

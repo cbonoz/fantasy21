@@ -276,3 +276,26 @@ def blend_projections(primary, secondary, secondary_weight=0.3):
     if primary is None or primary <= 0:
         return secondary
     return (1 - secondary_weight) * primary + secondary_weight * secondary
+
+
+def compute_fp_projection(position, stats):
+    """Convert a FantasyPros weekly stat dict to FanDuel points (non-PPR)."""
+    def f(key):
+        try:
+            return float(stats.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    if position == 'QB':
+        return (f('pass_yds') * 0.04 + f('pass_tds') * 4
+                + f('rush_yds') * 0.1 + f('rush_tds') * 6
+                - f('pass_ints') - f('fl'))
+    if position in ('RB', 'WR'):
+        return (f('rush_yds') * 0.1 + f('rush_tds') * 6
+                + f('rec_yds') * 0.1 + f('rec_tds') * 6
+                - f('fl'))
+    if position == 'TE':
+        return f('rec_yds') * 0.1 + f('rec_tds') * 6 - f('fl')
+    if position == 'K':
+        return f('fg') * 3 + f('xpt')
+    return 0.0
