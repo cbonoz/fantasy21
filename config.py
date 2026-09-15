@@ -76,23 +76,15 @@ ROOFED_TEAMS = {'ARI', 'ATL', 'DAL', 'DET', 'HOU', 'IND', 'LAR', 'LV', 'MIN', 'N
 
 # Players to force into / out of the pool (weekly tuned)
 READD = [
-    'Justin Herbert', 'George Kittle', 'Patrick Taylor Jr.', 'Bailey Zappe',
-    "D'Andre Swift", 'David Montgomery',"Wan'Dale Robinson"
+
 ]
-BANNED_CLASSIC = ['Jared Goff'
-#   'Pittsburgh Steelers', 'Jalen Coker', 'Kyler Murray',
-#     'Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", 'Jaylen Warren', "Amon-Ra St. Brown", 'Hollywood Brown',
-#     'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
+BANNED_CLASSIC = [
+#   'Jared Goff', 'Chris Olave', 'Seattle Seahawks', 'KC Concepcion', 'Dallas Goedert', 'Deebo Samuel Sr.', 'Demarcus Robinson', 'Mark Andrews', 'Denver Broncos', 'Tennessee Titans'
 ]
-BANNED_SINGLE = ["Rashee Rice", 'Rashee Rice (MVP)', "Lil'Jordan Humphrey", "Marvin Mims Jr.", 'Troy Franklin', 'Jonah Coleman'
-#   'Justin Fields', 'Jonah Coleman', 'Tyquan Thornton', "Lil'Jordan Humphrey", "Rashee Rice", 'Patrick Mahomes (MVP)', 'Denver Broncos', 'Marvin Mims Jr.', 'Rashee Rice (MVP)'
-#   'Jaxon Smith-Njigba (MVP)',  'Puka Nacua (MVP)', 'George Kittle (MVP)', 'Jaxon Smith-Njigba', 'A.J. Brown (MVP)', 'New England Patriots',
-#   'Christian McCaffrey (MVP)', 'Jake Tonges', 'Tyler Higbee', 'Kyren Williams (MVP)', 'Terrance Ferguson', 'Mac Jones', 'Tyler Higbee (MVP)',
-#  'Jameis Winston', 'Cam Skattebo', 'Cam Skattebo (MVP)', 'J.K. Dobbins', 'Javonte Williams (MVP)', 'George Pickens', 'Justin Fields (MVP)',  'Tyrone Tracy Jr. (MVP)', 'Jameis Winston (MVP)', 'George Pickens (MVP)', 'Patrick Mahomes (MVP)', 'Justin Fields'
-    #  'Jaxon Smith-Njigba (MVP)', 'Seattle Seahawks', 'Tommy DeVito', 'Seattle Seahawks (MVP)', 'Jaxon Smith-Njigba'
+BANNED_SINGLE = [
 ]
 
 LOCKED = [
-  'Kenneth Walker III',
+  'Bryce Young',
   ]
 BLOCKED_TEAMS = []

@@ -744,13 +744,13 @@ def print_optimized_roster(roster):
 
     roster_data.sort(key=lambda x: x['pos_order'])
 
-    print(f"{'Slot':<6} {'Name':<27} {'Team':<5} {'Opp':<5} {'Salary':<10} {'Weather':<8} {'Base Proj':<12} {'Weighted Proj':<15} {'Value':<10} {'Spread':<8}")
-    print("-" * 128)
+    print(f"{'Slot':<6} {'Name':<24} {'Team':<5} {'Opp':<5} {'Salary':<10} {'Weather':<8} {'Base Proj':<12} {'Weighted Proj':<15} {'Value':<10} {'Spread':<8}")
+    print("-" * 125)
     for row in roster_data:
-        print(f"{row['Slot']:<6} {row['Name']:<27} {row['Team']:<5} {row['Opp']:<5} {row['Salary']:<10} {row['Weather']:<8} {row['Base Proj']:<12} {row['Weighted Proj']:<15} {row['Value']:<10} {row['Spread']:<8}")
+        print(f"{row['Slot']:<6} {row['Name']:<24} {row['Team']:<5} {row['Opp']:<5} {row['Salary']:<10} {row['Weather']:<8} {row['Base Proj']:<12} {row['Weighted Proj']:<15} {row['Value']:<10} {row['Spread']:<8}")
 
     print("-" * 120)
-    print(f"{'TOTAL':<6} {'':<27} {'':<5} ${total_salary:,} {'':<12} {get_score(roster):<15.2f}")
+    print(f"{'TOTAL':<6} {'':<24} {'':<5} ${total_salary:,} {'':<12} {get_score(roster):<15.2f}")
     print("-" * 3)
 
 

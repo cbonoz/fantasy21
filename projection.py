@@ -4,7 +4,7 @@
 
 def calculate_wind_factor(wind_speed, pos):
     """Wind adjustment factor by position (<1 penalty, >1 bonus, 1 neutral)."""
-    if not wind_speed or wind_speed < 2:
+    if not wind_speed or wind_speed != wind_speed or wind_speed < 2:
         return 1.0
 
     if pos == 'QB':
@@ -79,7 +79,7 @@ def calculate_wind_factor(wind_speed, pos):
 
 def calculate_temperature_factor(temp, pos):
     """Temperature adjustment factor by position."""
-    if not temp or temp < -10 or temp > 130:
+    if not temp or temp != temp or temp < -10 or temp > 130:
         return 1.0
 
     if pos == 'QB':
@@ -147,7 +147,7 @@ def calculate_temperature_factor(temp, pos):
 
 def calculate_precipitation_factor(precip_chance, pos):
     """Precipitation adjustment factor by position."""
-    if not precip_chance or precip_chance < 5:
+    if not precip_chance or precip_chance != precip_chance or precip_chance < 5:
         return 1.0
 
     if pos == 'QB':

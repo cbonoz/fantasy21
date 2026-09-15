@@ -19,6 +19,9 @@ class TestWindFactor:
         assert calculate_wind_factor(None, 'QB') == 1.0
         assert calculate_wind_factor(1, 'QB') == 1.0
 
+    def test_nan_is_neutral(self):
+        assert calculate_wind_factor(float('nan'), 'WR') == 1.0
+
     def test_rb_boosted_by_wind(self):
         assert calculate_wind_factor(18, 'RB') > 1.0
 
@@ -36,6 +39,9 @@ class TestTemperatureFactor:
     def test_neutral_without_temp(self):
         assert calculate_temperature_factor(None, 'QB') == 1.0
 
+    def test_nan_is_neutral(self):
+        assert calculate_temperature_factor(float('nan'), 'WR') == 1.0
+
     def test_cold_penalizes_qb_wr(self):
         assert calculate_temperature_factor(10, 'QB') < 1.0
         assert calculate_temperature_factor(10, 'WR') < 1.0
@@ -50,6 +56,9 @@ class TestTemperatureFactor:
 class TestPrecipitationFactor:
     def test_neutral_without_precip(self):
         assert calculate_precipitation_factor(None, 'QB') == 1.0
+
+    def test_nan_is_neutral(self):
+        assert calculate_precipitation_factor(float('nan'), 'TE') == 1.0
 
     def test_rain_penalizes_qb_wr(self):
         assert calculate_precipitation_factor(80, 'QB') < 1.0

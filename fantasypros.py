@@ -88,12 +88,22 @@ def _parse_position(position, html):
 
 
 def get_projections(week):
-    """FantasyPros projections for all positions, cached per week."""
+    """FantasyPros projections for all positions, cached per week.
+
+    Falls back to the previous week's cache when the requested week's scrape
+    yields no players (e.g. layout/WAF issues) and caches that fallback, so the
+    pipeline keeps a projection source without re-fetching on every run. Delete
+    the cache file to force a fresh scrape.
+    """
     cache_file = _cache_path(week)
+
     if os.path.isfile(cache_file):
-        print('return cached data', 'fantasypros', os.path.basename(cache_file))
         with open(cache_file) as f:
-            return json.load(f)
+            cached = json.load(f)
+        if cached:
+            print('return cached data', 'fantasypros', os.path.basename(cache_file))
+            return cached
+        print('empty cache', os.path.basename(cache_file))
 
     entries = []
     for position, slug in POSITIONS.items():
@@ -106,10 +116,29 @@ def get_projections(week):
             continue
         entries.extend(_parse_position(position, resp.text))
 
-    with open(cache_file, 'w') as f:
-        json.dump(entries, f)
-    print(f"Saved FantasyPros projections to {cache_file} ({len(entries)} players)")
-    return entries
+    if entries:
+        with open(cache_file, 'w') as f:
+            json.dump(entries, f)
+        print(f"Saved FantasyPros projections to {cache_file} ({len(entries)} players)")
+        return entries
+
+    # Nothing usable for this week: prefer last week's projections over zero,
+    # and cache the fallback so we don't re-fetch on every run.
+    if week and week > 1:
+        prev_file = _cache_path(week - 1)
+        if os.path.isfile(prev_file):
+            with open(prev_file) as f:
+                fallback = json.load(f)
+            if fallback:
+                with open(cache_file, 'w') as f:
+                    json.dump(fallback, f)
+                print(f"fantasypros week {week} returned no players; cached week {week - 1} projections as fallback")
+                return fallback
+
+    if os.path.isfile(cache_file):
+        os.remove(cache_file)
+    print(f"fantasypros week {week} returned no players and no fallback available")
+    return []
 
 
 def build_projection_map(week):
