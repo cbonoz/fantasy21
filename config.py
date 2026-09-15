@@ -84,7 +84,7 @@ BANNED_CLASSIC = ['Jared Goff'
 #     'Jared Goff', 'Trevor Lawrence', 'Rico Dowdle', "Ja'Marr Chase", 'Jaylen Warren', "Amon-Ra St. Brown", 'Hollywood Brown',
 #     'Houston Texans', 'Travis Etienne Jr.', 'Jacksonville Jaguars', 'Tee Higgins', 'Kimani Vidal', 'Jameson Williams', 'James Cook III',
 ]
-BANNED_SINGLE = ["Rashee Rice", 'Rashee Rice (MVP)', "Lil'Jordan Humphrey", "Marvin Mims Jr.", 'Troy Franklin'
+BANNED_SINGLE = ["Rashee Rice", 'Rashee Rice (MVP)', "Lil'Jordan Humphrey", "Marvin Mims Jr.", 'Troy Franklin', 'Jonah Coleman'
 #   'Justin Fields', 'Jonah Coleman', 'Tyquan Thornton', "Lil'Jordan Humphrey", "Rashee Rice", 'Patrick Mahomes (MVP)', 'Denver Broncos', 'Marvin Mims Jr.', 'Rashee Rice (MVP)'
 #   'Jaxon Smith-Njigba (MVP)',  'Puka Nacua (MVP)', 'George Kittle (MVP)', 'Jaxon Smith-Njigba', 'A.J. Brown (MVP)', 'New England Patriots',
 #   'Christian McCaffrey (MVP)', 'Jake Tonges', 'Tyler Higbee', 'Kyren Williams (MVP)', 'Terrance Ferguson', 'Mac Jones', 'Tyler Higbee (MVP)',
@@ -93,6 +93,6 @@ BANNED_SINGLE = ["Rashee Rice", 'Rashee Rice (MVP)', "Lil'Jordan Humphrey", "Mar
 ]
 
 LOCKED = [
-  'Jaylen Waddle', 'Kenneth Walker III',
+  'Kenneth Walker III',
   ]
 BLOCKED_TEAMS = []

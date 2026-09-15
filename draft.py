@@ -44,8 +44,24 @@ def get_week_relative_to_start(season_start=config.SEASON_START):
     return math.ceil(num_days / 7)
 
 
-WEEK = max(get_week_relative_to_start(), 1)
+def get_slate_week_from_file(filepath, season_start=config.SEASON_START):
+    """Derive slate week from the FanDuel filename, e.g.
+    'FanDuel-NFL-2026 EDT-09 EDT-20 EDT-134251-players-list.csv'
+    encodes year=2026, month=09, slate day=20. Returns None if unparseable."""
+    import re
+    m = re.search(r'NFL-(\d{4}) EDT-(\d{2}) EDT-(\d{2})', os.path.basename(filepath))
+    if not m:
+        return None
+    year, month, day = map(int, m.groups())
+    slate = datetime(year, month, day)
+    start = datetime.strptime(season_start, '%m/%d/%Y')
+    if slate < start:
+        return None
+    return ((slate - start).days // 7) + 1
+
+
 SALARY_FILE = f"{config.DATA_FOLDER}/{get_most_recently_created_file_with_extension(config.DATA_FOLDER, 'csv')}"
+WEEK = get_slate_week_from_file(SALARY_FILE) or max(get_week_relative_to_start(), 1)
 ACTIVE_FILE = f"{config.ACTIVE_FOLDER}/data.csv"
 UPLOAD_FILE = f"{config.UPLOAD_FOLDER}/upload.csv"
 
