@@ -83,9 +83,18 @@ print('ready', SALARY_FILE, WEEK)
 fpa_map = {}
 try:
     fpa_map = compute_fpa_map(WEEK) or {}
+    print(f"Using {len(fpa_map)} FPA entries")
 except Exception as e:
     print('Error loading FPA data:', e)
     fpa_map = {}
+
+# Per-position league-average points allowed per game, used as the neutral
+# baseline for FPA adjustments (a defense allowing average = 0 bonus).
+fpa_baselines = {}
+for _entry in fpa_map.values():
+    for _pos, _value in _entry.items():
+        fpa_baselines.setdefault(_pos, []).append(_value)
+fpa_baselines = {pos: sum(v) / len(v) for pos, v in fpa_baselines.items()}
 
 # ============================================================
 # Vegas spreads / over-unders -> favor_map, team_totals
@@ -252,8 +261,10 @@ ACTIVE_RULE_SET.salary_max = config.SALARY_MAX
 ACTIVE_RULE_SET.defensive_positions = ['D', 'DEF']
 ACTIVE_RULE_SET.offensive_positions = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'WR/FLEX', 'K', 'MVP'] if SINGLE_GAME else ['QB', 'RB', 'WR', 'TE', 'FLEX', 'WR/FLEX', 'K']
 ACTIVE_RULE_SET.position_limits = get_nfl_positions()
-ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
-if not SINGLE_GAME:
+if SINGLE_GAME:
+    ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
+else:
+    ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
     ACTIVE_RULE_SET.max_players_per_team = config.MAX_PLAYERS_PER_TEAM_CLASSIC
 ACTIVE_RULE_SET.roster_size = config.ROSTER_SIZE_CLASSIC if not SINGLE_GAME else config.ROSTER_SIZE_SINGLE
 
@@ -368,7 +379,10 @@ def calculate_fpa_bonus(p, opponent):
     allowed = entry.get(p.pos) if isinstance(entry, dict) else None
     if not allowed:
         return 0
-    return (float(allowed) - 20.0) * config.FPA_WEIGHT  # 20 = rough league-average FD points allowed
+    baseline = fpa_baselines.get(p.pos, 0.0)
+    if baseline <= 0:
+        return 0
+    return (float(allowed) - baseline) * config.FPA_WEIGHT
 
 
 def calculate_injury_bonuses(p, opponent):

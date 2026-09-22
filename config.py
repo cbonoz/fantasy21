@@ -22,8 +22,9 @@ SEASON_START = '09/13/2026'
 
 MAX_SALARY = 9900
 SALARY_MAX = 60000
-SALARY_MIN_OFFSET = 100          # 200 for single-game slates
-MIN_SALARY_CLASSIC = 4900
+SALARY_MIN_OFFSET = 100
+SALARY_MIN_OFFSET_SINGLE = 300
+MIN_SALARY_CLASSIC = 5000
 MIN_SALARY_SINGLE = 2100
 MIN_QB_SALARY_CLASSIC = 6400
 MIN_QB_SALARY_SINGLE = 1000
@@ -40,7 +41,7 @@ AVERAGE_WEIGHT = .5
 INJURY_FACTOR = .12
 INJURED_QB_BONUS = 1.25
 MIN_SCORE = 7
-MAX_SCORE = 27
+MAX_SCORE = 30
 MAX_DEF_MULTIPLIER = 2.0
 MIN_PROJ_MULTIPLIER = 0.5
 LOW_SALARY_SKIP = 4200
@@ -79,12 +80,31 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
+  'Kenneth Walker III', 'James Cook III', 'Jaxson Dart', 'Bryce Young', 'Antonio Williams', 'Braelon Allen', 'Amon-Ra St. Brown',
+  #   'Patrick Mahomes', 'Antonio Williams', 'Jared Goff'
+  # 'Kenneth Walker III', 'Antonio Williams', 'Jakobi Meyers', 'Jack Bech', 'James Cook III', 'Carolina Panthers', 'Emmett Johnson'
+  # 'Pittsburgh Steelers', 'Deebo Samuel Sr.', 'Dallas Goedert', 'Justin Jefferson', 'Mark Andrews',
+  # 'Parker Washington', 'Arizona Cardinals','
+  # 'Pittsburgh Steelers',  'Parker Washington', 'Las Vegas Raiders',
+  #   'Brenton Strange', 'David Montgomery', 'Dallas Goedert', 'Cincinnati Bengals', 'Justin Jefferson', 'Deebo Samuel Sr.', 'Trey McBride', 'Juwan Johnson', 'Seattle Seahawks', "D'Andre Swift"
+  #  'Seattle Seahawks', 'Tampa Bay Buccaneers', 'San Francisco 49ers', 'Justin Jefferson'
 #   'Jared Goff', 'Chris Olave', 'Seattle Seahawks', 'KC Concepcion', 'Dallas Goedert', 'Deebo Samuel Sr.', 'Demarcus Robinson', 'Mark Andrews', 'Denver Broncos', 'Tennessee Titans'
 ]
-BANNED_SINGLE = [
+BANNED_SINGLE = ['Xavier Smith',
+  # 'Kenneth Walker III (MVP)'
+  # 'Los Angeles Rams', 'Ronnie Rivers', 'Devin Singletary', 'Terrance Ferguson'
+  # 'DJ Moore (MVP)', 'Jahmyr Gibbs (MVP)'
 ]
 
 LOCKED = [
-  'Bryce Young',
+  'Josh Allen', 'Travis Kelce'
+  # 'Davante Adams'
+  # 'Matthew Stafford'
+  # 'Travis Kelce', 'David Montgomery'
+  # 'Cincinnati Bengals', 'Josh Allen',
+  # 'Malik Nabers', 'Matthew Stafford'
+  # 'Kenneth Walker III', 'Rashod Bateman', 'Derrick Henry', 'Bijan Robinson', 'Caleb Williams',
+  # 'Bryce Young',
+    # 'New England Patriots'
   ]
 BLOCKED_TEAMS = []

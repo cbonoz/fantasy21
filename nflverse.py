@@ -62,7 +62,13 @@ def prior_week_stats(week, season=None):
 def compute_fpa_map(week, season=None):
     """
     Fantasy points allowed per team per position, averaged over prior weeks.
-    Returns {defense_team: {position: avg_fd_points_allowed}}.
+
+    Uses the standard FPA metric: all FanDuel points scored at a position by
+    the opposing team in a single game are summed, then averaged per game.
+    Summing per game (instead of averaging per player) avoids diluting a
+    matchup when teams rotate multiple players at a position.
+
+    Returns {defense_team: {position: avg_fd_points_allowed_per_game}}.
     """
     cache_file = f"{config.CACHE_FOLDER}/fpa_week_{week}.json"
     if os.path.isfile(cache_file):
@@ -71,13 +77,17 @@ def compute_fpa_map(week, season=None):
             return json.load(f)
 
     prior = prior_week_stats(week, season)
-    fpa = defaultdict(lambda: defaultdict(list))
+    game_totals = defaultdict(float)
     for row in prior.itertuples(index=False):
         if row.position not in OFFENSIVE_POSITIONS:
             continue
         pts = compute_fd_points(row._asdict(), row.position)
         opp = normalize_team_abbr(row.opponent_team)
-        fpa[opp][row.position].append(pts)
+        game_totals[(opp, row.position, row.week)] += pts
+
+    fpa = defaultdict(lambda: defaultdict(list))
+    for (opp, pos, _week), total in game_totals.items():
+        fpa[opp][pos].append(total)
 
     result = {}
     for team, positions in fpa.items():
