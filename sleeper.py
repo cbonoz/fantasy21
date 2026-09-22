@@ -35,6 +35,7 @@ def build_projection_map(week, season=None):
     """
     Map (team, position, normalized_full_name) -> Sleeper pts_std projection.
     Standard (non-PPR) scoring, which is the closest match to FanDuel scoring.
+    Team defenses are keyed by (team, 'DEF', '').
     """
     result = {}
     for entry in get_projections(week, season):
@@ -43,9 +44,13 @@ def build_projection_map(week, season=None):
         if pts is None:
             continue
         player = entry.get('player') or {}
-        full_name = f"{player.get('first_name')} {player.get('last_name')}".strip()
         position = player.get('position')
         team = normalize_team_abbr(entry.get('team'))
+        if position == 'DEF':
+            if team:
+                result[(team, 'DEF', '')] = float(pts)
+            continue
+        full_name = f"{player.get('first_name')} {player.get('last_name')}".strip()
         if not full_name or not position or team == '':
             continue
         result[(team, position, normalize_player_name(full_name))] = float(pts)

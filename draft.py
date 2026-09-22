@@ -410,8 +410,15 @@ def get_blended_projection(p, history_key):
 
 
 def history_key_for(p):
-    """Normalized lookup key into nflverse history averages."""
-    if p.pos in ['D', 'MVP']:
+    """Normalized lookup key into nflverse history averages.
+
+    Defenses return None: nflverse defensive history only covers big plays
+    (sacks/INTs/TDs) and is not comparable to FanDuel DST scoring, so defense
+    projections are anchored on FanDuel FPPG + Sleeper/FantasyPros DST instead.
+    """
+    if p.pos == 'D':
+        return None
+    if p.pos == 'MVP':
         return normalize_team_abbr(p.team).lower()
     return normalize_player_name(p.name)
 
@@ -420,7 +427,7 @@ def sleeper_projection_for(p):
     """Sleeper pts_std for a player, keyed by base position/name."""
     pos = base_position(p)
     if pos == 'D':
-        return None
+        return sleeper_proj_map.get((p.team, 'DEF', ''))
     return sleeper_proj_map.get((p.team, pos, normalize_player_name(p.name.replace(' (MVP)', ''))))
 
 
@@ -492,9 +499,11 @@ def calculate_adjusted_projection(p):
     # Injury adjustments
     matchup_bonus += calculate_injury_bonuses(p, opponent)
 
-    # Defenses/MVPs also account for opponent offense weakness
+    # Defenses/MVPs also account for opponent offense weakness.
+    # excluded_bonus is negative when the opponent's QB is out (and positive
+    # for skill-position injuries); either way a weakened offense helps the D.
     if p.pos in ['D', 'MVP']:
-        matchup_bonus += excluded_bonus.get(opponent, 0) / 4
+        matchup_bonus += abs(excluded_bonus.get(opponent, 0)) / 4
 
     # Weather adjustment (additive, capped at 20% of base)
     weather_bonus = 0

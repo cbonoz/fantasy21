@@ -102,20 +102,24 @@ def compute_history(week, season=None):
     """
     Prior-week averages of FanDuel points per player (normalized name key) and
     per defense team (lowercase abbr key), matching draft.py's lookup keys.
+    Defensive points are summed per game (not averaged per player row) so
+    multi-defender rotations don't dilute a team's defensive scoring.
     """
     prior = prior_week_stats(week, season)
     player_fd = defaultdict(list)
-    team_fd = defaultdict(list)
+    team_fd = defaultdict(lambda: defaultdict(float))
     for row in prior.itertuples(index=False):
         if row.position in OFFENSIVE_POSITIONS:
             player_fd[normalize_player_name(row.player_display_name)].append(
                 compute_fd_points(row._asdict(), row.position))
         elif row.position_group in DEFENSIVE_GROUPS:
-            team_fd[normalize_team_abbr(row.team).lower()].append(
-                compute_defense_fd_points(row._asdict()))
+            team = normalize_team_abbr(row.team).lower()
+            team_fd[team][row.week] += compute_defense_fd_points(row._asdict())
 
     history = {name: round(sum(v) / len(v), 3) for name, v in player_fd.items() if v}
-    history.update({team: round(sum(v) / len(v), 3) for team, v in team_fd.items() if v})
+    for team, weeks in team_fd.items():
+        if weeks:
+            history[team] = round(sum(weeks.values()) / len(weeks), 3)
     return history
 
 

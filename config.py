@@ -80,7 +80,8 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Kenneth Walker III', 'James Cook III', 'Jaxson Dart', 'Bryce Young', 'Antonio Williams', 'Braelon Allen', 'Amon-Ra St. Brown',
+  # 'Jaxon Smith-Njigba'
+  # 'Kenneth Walker III', 'James Cook III', 'Jaxson Dart', 'Bryce Young', 'Antonio Williams', 'Braelon Allen', 'Amon-Ra St. Brown',
   #   'Patrick Mahomes', 'Antonio Williams', 'Jared Goff'
   # 'Kenneth Walker III', 'Antonio Williams', 'Jakobi Meyers', 'Jack Bech', 'James Cook III', 'Carolina Panthers', 'Emmett Johnson'
   # 'Pittsburgh Steelers', 'Deebo Samuel Sr.', 'Dallas Goedert', 'Justin Jefferson', 'Mark Andrews',
