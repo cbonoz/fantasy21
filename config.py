@@ -39,7 +39,13 @@ MAX_PLAYERS_PER_TEAM_CLASSIC = 9
 WEIGHTED = True
 AVERAGE_WEIGHT = .5
 INJURY_FACTOR = .12
-INJURED_QB_BONUS = 1.25
+# Bonus when a team's starting QB is out. Full value to defenses/MVPs facing
+# the injured QB (backup-QB matchups are a strong DST edge); half to skill
+# players (game-script benefit); RBs get full when their OWN QB is out.
+INJURED_QB_BONUS = 2.5
+# Multiplier on the opponent's net injury weakness (abs of excluded_bonus)
+# for defenses/MVPs: a weakened opponent offense helps the D.
+OPPONENT_INJURY_WEIGHT = 0.4
 MIN_SCORE = 7
 MAX_SCORE = 30
 MAX_DEF_MULTIPLIER = 2.0
@@ -79,7 +85,8 @@ ROOFED_TEAMS = {'ARI', 'ATL', 'DAL', 'DET', 'HOU', 'IND', 'LAR', 'LV', 'MIN', 'N
 READD = [
 
 ]
-BANNED_CLASSIC = [
+BANNED_CLASSIC = ['Isaiah Likely', 'Amon-Ra St. Brown', 'Patrick Mahomes', 'James Cook III', 'Mike Gesicki', 'Ladd McConkey',
+                   'Jaxon Smith-Njigba', 'Carolina Panthers', 'Tre Tucker', 'Bryce Young', 'Derrick Henry', 'CeeDee Lamb'
   # 'Jaxon Smith-Njigba'
   # 'Kenneth Walker III', 'James Cook III', 'Jaxson Dart', 'Bryce Young', 'Antonio Williams', 'Braelon Allen', 'Amon-Ra St. Brown',
   #   'Patrick Mahomes', 'Antonio Williams', 'Jared Goff'
@@ -91,14 +98,16 @@ BANNED_CLASSIC = [
   #  'Seattle Seahawks', 'Tampa Bay Buccaneers', 'San Francisco 49ers', 'Justin Jefferson'
 #   'Jared Goff', 'Chris Olave', 'Seattle Seahawks', 'KC Concepcion', 'Dallas Goedert', 'Deebo Samuel Sr.', 'Demarcus Robinson', 'Mark Andrews', 'Denver Broncos', 'Tennessee Titans'
 ]
-BANNED_SINGLE = ['Xavier Smith',
+BANNED_SINGLE = ['Xavier Smith'
   # 'Kenneth Walker III (MVP)'
   # 'Los Angeles Rams', 'Ronnie Rivers', 'Devin Singletary', 'Terrance Ferguson'
   # 'DJ Moore (MVP)', 'Jahmyr Gibbs (MVP)'
 ]
 
 LOCKED = [
-  'Josh Allen', 'Travis Kelce'
+  'Travis Kelce',
+  # 'Terry McLaurin'
+  # 'Josh Allen',
   # 'Davante Adams'
   # 'Matthew Stafford'
   # 'Travis Kelce', 'David Montgomery'

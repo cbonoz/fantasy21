@@ -503,7 +503,7 @@ def calculate_adjusted_projection(p):
     # excluded_bonus is negative when the opponent's QB is out (and positive
     # for skill-position injuries); either way a weakened offense helps the D.
     if p.pos in ['D', 'MVP']:
-        matchup_bonus += abs(excluded_bonus.get(opponent, 0)) / 4
+        matchup_bonus += abs(excluded_bonus.get(opponent, 0)) * config.OPPONENT_INJURY_WEIGHT
 
     # Weather adjustment (additive, capped at 20% of base)
     weather_bonus = 0
