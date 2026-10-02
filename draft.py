@@ -250,7 +250,7 @@ def get_nfl_positions():
         return positions
     return [
         ['QB', 1, 1],
-        ['RB', 3, 3],
+        ['RB', 2, 3],
         ['WR', 3, 4],
         ['TE', 1, 2],
         ['D', 1, 1],
@@ -687,6 +687,26 @@ def build_optimizer_settings(players, block_function):
                         comparison=lambda sum, a, b: sum(a) <= 1,
                     )
                 )
+
+    # Never pair a QB with an RB from the same team (diversifies the stack).
+    for team in set(p.team for p in players if p.pos in ('QB', 'RB')):
+        custom_rules.append(
+            CustomRule(
+                group_a=lambda p, team=team: p.pos == 'QB' and p.team == team,
+                group_b=lambda p, team=team: p.pos == 'RB' and p.team == team,
+                comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
+            )
+        )
+
+    # Never pair a WR with a TE from the same team.
+    for team in set(p.team for p in players if p.pos in ('WR', 'TE')):
+        custom_rules.append(
+            CustomRule(
+                group_a=lambda p, team=team: p.pos == 'WR' and p.team == team,
+                group_b=lambda p, team=team: p.pos == 'TE' and p.team == team,
+                comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
+            )
+        )
 
     return OptimizerSettings(custom_rules=custom_rules, min_teams=3)
 

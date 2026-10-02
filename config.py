@@ -86,8 +86,8 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Christian McCaffrey', 'Cincinnati Bengals', 'Derrick Henry', 'Deebo Samuel Sr.', 'James Cook III', 'Chris Olave',
-  'Case Keenum', 'Minnesota Vikings', 'Devaughn Vele', 'Jahmyr Gibbs', 'Jaxon Smith-Njigba',  'Parker Washington'
+  'Christian McCaffrey', 'Cincinnati Bengals', 'Derrick Henry', 'Deebo Samuel Sr.', 'James Cook III', 'Kenneth Walker III',
+  'Case Keenum', 'Minnesota Vikings', 'Devaughn Vele', 'Jahmyr Gibbs', 'Jaxon Smith-Njigba',  'Parker Washington', 'CeeDee Lamb',
   # 'Cincinnati Bengals', 'New England Patriots', 'Devaughn Vele', 'Case Keenum', 'CeeDee Lamb', 'Patrick Mahomes',
   # 'Deebo Samuel Sr.', 'Christian McCaffrey', 'Chris Olave', 'Jahmyr Gibbs', 'Minnesota Vikings', "D'Andre Swift", "Kenneth Walker III", "Jaxon Smith-Njigba", "Derrick Henry", "Las Vegas Raiders"
   # 'Seattle Seahawks', 'Jakobi Meyers', 'Jaylen Waddle', 'George Kittle', 'CeeDee Lamb',
@@ -112,6 +112,7 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 ]
 
 LOCKED = [
+  # 'Christian Watson'
   # 'Bijan Robinson'
   # 'Brock Purdy'
   # 'Dalton Schultz'
