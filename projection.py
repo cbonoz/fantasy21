@@ -146,7 +146,12 @@ def calculate_temperature_factor(temp, pos):
 
 
 def calculate_precipitation_factor(precip_chance, pos):
-    """Precipitation adjustment factor by position."""
+    """Precipitation adjustment factor by position.
+
+    Deliberately steep for passers: rain is a strong QB/WR fade, so even a
+    modest rain chance should drop a passer's projection enough that a
+    neutral-weather option wins. RBs gain a larger carry share.
+    """
     if not precip_chance or precip_chance != precip_chance or precip_chance < 5:
         return 1.0
 
@@ -154,47 +159,47 @@ def calculate_precipitation_factor(precip_chance, pos):
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.97
+            return 0.80
         elif precip_chance < 75:
-            return 0.94
+            return 0.70
         else:
-            return 0.90
+            return 0.60
     elif pos in ['WR', 'TE']:
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.96
+            return 0.78
         elif precip_chance < 75:
-            return 0.92
+            return 0.68
         else:
-            return 0.87
+            return 0.55
     elif pos == 'RB':
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 1.03
-        elif precip_chance < 75:
             return 1.05
+        elif precip_chance < 75:
+            return 1.09
         else:
-            return 1.07
+            return 1.12
     elif pos == 'K':
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.98
+            return 0.82
         elif precip_chance < 75:
-            return 0.95
+            return 0.72
         else:
-            return 0.90
+            return 0.62
     elif pos in ('D', 'MVP'):
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 1.02
+            return 1.05
         elif precip_chance < 75:
-            return 1.04
+            return 1.09
         else:
-            return 1.06
+            return 1.12
 
     return 1.0
 

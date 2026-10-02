@@ -47,11 +47,11 @@ INJURED_QB_BONUS = 2.5
 # for defenses/MVPs: a weakened opponent offense helps the D.
 OPPONENT_INJURY_WEIGHT = 0.4
 MIN_SCORE = 7
-MAX_SCORE = 30
+MAX_SCORE = 29
 MAX_DEF_MULTIPLIER = 2.0
 MIN_PROJ_MULTIPLIER = 0.5
 LOW_SALARY_SKIP = 4200
-MAX_WEATHER_BONUS = 0.20
+MAX_WEATHER_BONUS = 0.40
 
 # Team-total (Vegas implied) projection weights.
 # A player's base projection is scaled by how far their team's implied
@@ -85,9 +85,16 @@ ROOFED_TEAMS = {'ARI', 'ATL', 'DAL', 'DET', 'HOU', 'IND', 'LAR', 'LV', 'MIN', 'N
 READD = [
 
 ]
-BANNED_CLASSIC = ['Isaiah Likely', 'Amon-Ra St. Brown', 'Patrick Mahomes', 'James Cook III', 'Mike Gesicki', 'Ladd McConkey',
-                   'Jaxon Smith-Njigba', 'Carolina Panthers', 'Tre Tucker', 'Bryce Young', 'Derrick Henry', 'CeeDee Lamb'
-  # 'Jaxon Smith-Njigba'
+BANNED_CLASSIC = [
+  'Christian McCaffrey', 'Cincinnati Bengals', 'Derrick Henry', 'Deebo Samuel Sr.', 'James Cook III', 'Chris Olave',
+  'Case Keenum', 'Minnesota Vikings', 'Devaughn Vele', 'Jahmyr Gibbs', 'Jaxon Smith-Njigba',  'Parker Washington'
+  # 'Cincinnati Bengals', 'New England Patriots', 'Devaughn Vele', 'Case Keenum', 'CeeDee Lamb', 'Patrick Mahomes',
+  # 'Deebo Samuel Sr.', 'Christian McCaffrey', 'Chris Olave', 'Jahmyr Gibbs', 'Minnesota Vikings', "D'Andre Swift", "Kenneth Walker III", "Jaxon Smith-Njigba", "Derrick Henry", "Las Vegas Raiders"
+  # 'Seattle Seahawks', 'Jakobi Meyers', 'Jaylen Waddle', 'George Kittle', 'CeeDee Lamb',
+  # 'Mike Gesicki', 'Tre Tucker', 'Jaxon Smith-Njigba', 'Amon-Ra St. Brown',  'Devaughn Vele', 'Derrick Henry', 'Jahmyr Gibbs'
+  # 'Juwan Johnson', 'Mike Gesicki', 'Chris Olave', 'Patrick Mahomes', 'Jaxon Smith-Njigba', 'Amon-Ra St. Brown', 'Justin Jefferson', 'Tre Tucker', 'Devaughn Vele'
+  # 'Tre Tucker', 'Derrick Henry', 'Justin Jefferson', 'Jaxon Smith-Njigba', 'Amon-Ra St. Brown', 'Devaughn Vele', 'Garrett Wilson', 'Tetairoa McMillan', 'Chris Olave', "D'Andre Swift" , 'Chuba Hubbard', 'Jack Bech'
+                  # 'Jaxon Smith-Njigba'
   # 'Kenneth Walker III', 'James Cook III', 'Jaxson Dart', 'Bryce Young', 'Antonio Williams', 'Braelon Allen', 'Amon-Ra St. Brown',
   #   'Patrick Mahomes', 'Antonio Williams', 'Jared Goff'
   # 'Kenneth Walker III', 'Antonio Williams', 'Jakobi Meyers', 'Jack Bech', 'James Cook III', 'Carolina Panthers', 'Emmett Johnson'
@@ -98,14 +105,18 @@ BANNED_CLASSIC = ['Isaiah Likely', 'Amon-Ra St. Brown', 'Patrick Mahomes', 'Jame
   #  'Seattle Seahawks', 'Tampa Bay Buccaneers', 'San Francisco 49ers', 'Justin Jefferson'
 #   'Jared Goff', 'Chris Olave', 'Seattle Seahawks', 'KC Concepcion', 'Dallas Goedert', 'Deebo Samuel Sr.', 'Demarcus Robinson', 'Mark Andrews', 'Denver Broncos', 'Tennessee Titans'
 ]
-BANNED_SINGLE = ['Xavier Smith'
+BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
   # 'Kenneth Walker III (MVP)'
   # 'Los Angeles Rams', 'Ronnie Rivers', 'Devin Singletary', 'Terrance Ferguson'
   # 'DJ Moore (MVP)', 'Jahmyr Gibbs (MVP)'
 ]
 
 LOCKED = [
-  'Travis Kelce',
+  # 'Bijan Robinson'
+  # 'Brock Purdy'
+  # 'Dalton Schultz'
+  # 'Josh Allen', 'Tennessee Titans', 'Chuba Hubbard',
+  # 'Travis Kelce'
   # 'Terry McLaurin'
   # 'Josh Allen',
   # 'Davante Adams'

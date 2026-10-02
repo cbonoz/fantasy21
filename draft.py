@@ -136,7 +136,8 @@ if not weather_df.empty:
         'Bills': 'BUF', 'Dolphins': 'MIA', 'Patriots': 'NE', 'Jets': 'NYJ',
         'Steelers': 'PIT', 'Browns': 'CLE', 'Ravens': 'BAL', 'Bengals': 'CIN',
         'Colts': 'IND', 'Texans': 'HOU', 'Jaguars': 'JAC', 'Titans': 'TEN',
-        'Broncos': 'DEN', 'Chiefs': 'KC', 'Chargers': 'LAC', 'Raiders': 'LV'
+        'Broncos': 'DEN', 'Chiefs': 'KC', 'Chargers': 'LAC', 'Raiders': 'LV',
+        'Washington': 'WAS'
     }
     weather_df['away_team'] = weather_df['away_team'].apply(lambda t: team_name_to_abbr.get(t, t))
     weather_df['home_team'] = weather_df['home_team'].apply(lambda t: team_name_to_abbr.get(t, t))
@@ -249,7 +250,7 @@ def get_nfl_positions():
         return positions
     return [
         ['QB', 1, 1],
-        ['RB', 2, 3],
+        ['RB', 3, 3],
         ['WR', 3, 4],
         ['TE', 1, 2],
         ['D', 1, 1],
@@ -273,24 +274,6 @@ ALL_POSITIONS = [*ACTIVE_RULE_SET.defensive_positions, *ACTIVE_RULE_SET.offensiv
 # ============================================================
 # Weather adjustment factors
 # ============================================================
-
-
-def get_weather_for_team(team, weather_df):
-    """Find weather data for a given team's game, or empty dict if not found."""
-    if weather_df.empty:
-        return {}
-    game = weather_df[(weather_df['away_team'] == team) | (weather_df['home_team'] == team)]
-    if game.empty:
-        return {}
-    game_data = game.iloc[0]
-    return {
-        'temperature': game_data.get('temperature'),
-        'wind_speed': game_data.get('wind_speed'),
-        'precipitation_chance': game_data.get('precipitation_chance'),
-        'condition': game_data.get('condition'),
-        'away_team': game_data.get('away_team'),
-        'home_team': game_data.get('home_team'),
-    }
 
 
 # ============================================================
@@ -441,14 +424,18 @@ def fp_projection_for(p):
 
 weather_factor_map = {}
 if not weather_df.empty:
-    for team in set(list(weather_df['away_team'].dropna()) + list(weather_df['home_team'].dropna())):
-        weather_info = get_weather_for_team(team, weather_df)
-        if weather_info:
-            if normalize_team_abbr(team) in config.ROOFED_TEAMS:
-                continue
-            wind = weather_info.get('wind_speed')
-            temp = weather_info.get('temperature')
-            precip = weather_info.get('precipitation_chance')
+    for _, game in weather_df.iterrows():
+        away = normalize_team_abbr(str(game['away_team']).strip())
+        home = normalize_team_abbr(str(game['home_team']).strip())
+        # Weather immunity belongs to the VENUE, not the player's team:
+        # when the home team plays in a dome/retractable-roof stadium the
+        # whole game is weather-immune, so both teams get factor 1.0.
+        if home in config.ROOFED_TEAMS:
+            continue
+        wind = game.get('wind_speed')
+        temp = game.get('temperature')
+        precip = game.get('precipitation_chance')
+        for team in (away, home):
             for pos in ALL_POSITIONS:
                 combined_factor = (calculate_wind_factor(wind, pos)
                                    * calculate_temperature_factor(temp, pos)
@@ -505,7 +492,7 @@ def calculate_adjusted_projection(p):
     if p.pos in ['D', 'MVP']:
         matchup_bonus += abs(excluded_bonus.get(opponent, 0)) * config.OPPONENT_INJURY_WEIGHT
 
-    # Weather adjustment (additive, capped at 20% of base)
+    # Weather adjustment (additive, capped at 40% of base)
     weather_bonus = 0
     combined_weather_factor = weather_factor_map.get((p.team, p.pos), 1.0)
     if combined_weather_factor != 1.0:
@@ -573,7 +560,8 @@ for p in players:
     elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
-        qbs.append((p.name, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, p.team))
+        weather = float(p.kv_store.get('weather_factor', 1.0))
+        qbs.append((p.name, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, p.team, weather))
 
 starter_map = build_starter_map(players, questionable_df)
 filtered_mvps = filter_mvps(mvps, players, starter_map)
@@ -602,14 +590,11 @@ if SINGLE_GAME:
 print("\n" + "=" * 105)
 print("SORTED QBs")
 print("=" * 105)
-print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Status':<10}")
+print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Weather':>8}")
 print("-" * 115)
-for name, proj, cost, value, team_total, total_deviation, base_fppg, opp, team in sorted(qbs, key=lambda x: x[3], reverse=True):
-    starter_name, _, starter_injured = starter_map.get((team, 'QB'), (None, None, False))
-    status = "Starter"
-    if starter_name and starter_name != name:
-        status = "Backup" if not starter_injured else f"Starter {starter_name} injured"
-    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f} {status:<10}")
+for name, proj, cost, value, team_total, total_deviation, base_fppg, opp, team, weather in sorted(qbs, key=lambda x: x[3], reverse=True):
+    arrow = '↓' if weather < 0.85 else ''
+    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f} {weather:>7.3f}{arrow}")
 
 display_weather_summary(weather_df)
 
