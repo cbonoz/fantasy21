@@ -43,6 +43,9 @@ INJURY_FACTOR = .12
 # the injured QB (backup-QB matchups are a strong DST edge); half to skill
 # players (game-script benefit); RBs get full when their OWN QB is out.
 INJURED_QB_BONUS = 2.5
+# Multiplier on the WR-injury pool for a team's remaining WRs: when a WR is
+# out, the other WRs inherit the vacated targets on top of the shared pool.
+WR_INHERITANCE_WEIGHT = 2.0
 # Multiplier on the opponent's net injury weakness (abs of excluded_bonus)
 # for defenses/MVPs: a weakened opponent offense helps the D.
 OPPONENT_INJURY_WEIGHT = 0.4
@@ -86,8 +89,8 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Christian McCaffrey', 'Cincinnati Bengals', 'Derrick Henry', 'Deebo Samuel Sr.', 'James Cook III', 'Kenneth Walker III',
-  'Case Keenum', 'Minnesota Vikings', 'Devaughn Vele', 'Jahmyr Gibbs', 'Jaxon Smith-Njigba',  'Parker Washington', 'CeeDee Lamb',
+  'Christian McCaffrey', 'Case Keenum', 'Cincinnati Bengals', 'Derrick Henry', 'Deebo Samuel Sr.', 'James Cook III', 'Chris Olave', 'Mike Gesicki',
+  'Minnesota Vikings', 'Jahmyr Gibbs', 'Jaxon Smith-Njigba',  'Zay Flowers',
   # 'Cincinnati Bengals', 'New England Patriots', 'Devaughn Vele', 'Case Keenum', 'CeeDee Lamb', 'Patrick Mahomes',
   # 'Deebo Samuel Sr.', 'Christian McCaffrey', 'Chris Olave', 'Jahmyr Gibbs', 'Minnesota Vikings', "D'Andre Swift", "Kenneth Walker III", "Jaxon Smith-Njigba", "Derrick Henry", "Las Vegas Raiders"
   # 'Seattle Seahawks', 'Jakobi Meyers', 'Jaylen Waddle', 'George Kittle', 'CeeDee Lamb',
@@ -112,8 +115,10 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 ]
 
 LOCKED = [
+  # 'Josh Allen', 'Jeremiyah Love',
+  #'Dontayvion Wicks', 'Jordan Addison',
   # 'Christian Watson'
-  # 'Bijan Robinson'
+  # 'Bijan Robinson', 'Josh Downs'
   # 'Brock Purdy'
   # 'Dalton Schultz'
   # 'Josh Allen', 'Tennessee Titans', 'Chuba Hubbard',

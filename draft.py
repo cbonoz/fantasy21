@@ -220,6 +220,9 @@ if config.USE_SNAP_BACKUP:
 INJURY_FACTOR = config.INJURY_FACTOR
 excluded_bonus = defaultdict(lambda: 0)
 injured_qb = defaultdict(lambda: False)
+# When a team's WR is out, the remaining WRs inherit the targets: extra pool
+# that only WRs on the team receive (on top of the shared excluded_bonus).
+wr_bonus = defaultdict(lambda: 0)
 
 for index, p in questionable_df.iterrows():
     pos = p['Position']
@@ -232,6 +235,8 @@ for index, p in questionable_df.iterrows():
                 injured_qb[p['Team']] = True
             elif pos in ('RB', 'WR', 'TE'):
                 amt = injury_offset * 1.2
+                if pos == 'WR':
+                    wr_bonus[p['Team']] += amt
             else:
                 amt = injury_offset
             excluded_bonus[p['Team']] += amt
@@ -379,6 +384,9 @@ def calculate_injury_bonuses(p, opponent):
         bonuses += excluded_bonus.get(p.team, 0) / 2
     else:
         bonuses += excluded_bonus.get(p.team, 0)
+    # WRs on a team with an injured WR inherit the vacated targets.
+    if p.pos == 'WR':
+        bonuses += wr_bonus.get(p.team, 0) * config.WR_INHERITANCE_WEIGHT
     if p.pos == 'RB' and injured_qb.get(p.team, False):
         bonuses += INJURED_QB_BONUS
     return bonuses
@@ -441,6 +449,22 @@ if not weather_df.empty:
                                    * calculate_temperature_factor(temp, pos)
                                    * calculate_precipitation_factor(precip, pos))
                 weather_factor_map[(team, pos)] = combined_factor
+
+# Flag any slate team that got no weather factor despite playing at an
+# outdoor venue: the weather cache is stale, missing, or corrupted (e.g. a
+# row whose matchup doesn't match the salary file). Teams playing in a
+# roofed stadium are weather-immune and correctly have no factor.
+if not SINGLE_GAME:
+    missing_weather = []
+    for t in set(df['Team']):
+        game = df.loc[df['Team'] == t, 'Game'].iloc[0]
+        home = str(game).split('@')[-1].strip()
+        if home in config.ROOFED_TEAMS:
+            continue
+        if (t, 'QB') not in weather_factor_map:
+            missing_weather.append(t)
+    if missing_weather:
+        print(f"WARNING: no weather factor for teams: {sorted(missing_weather)} — weather cache likely stale/mismatched")
 
 
 def get_opponent(p):
@@ -704,6 +728,21 @@ def build_optimizer_settings(players, block_function):
             CustomRule(
                 group_a=lambda p, team=team: p.pos == 'WR' and p.team == team,
                 group_b=lambda p, team=team: p.pos == 'TE' and p.team == team,
+                comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
+            )
+        )
+
+    # Never pair a defense with offensive players from the team it faces:
+    # both bet on opposite outcomes of the same game.
+    team_to_opponent = {}
+    for p in players:
+        if p.matchup and '@' in p.matchup:
+            team_to_opponent[p.team] = get_opponent(p)
+    for def_team, opp_team in team_to_opponent.items():
+        custom_rules.append(
+            CustomRule(
+                group_a=lambda p, def_team=def_team: p.pos == 'D' and p.team == def_team,
+                group_b=lambda p, opp_team=opp_team: p.pos in ('QB', 'RB', 'WR', 'TE') and p.team == opp_team,
                 comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
             )
         )
