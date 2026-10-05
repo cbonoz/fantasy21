@@ -177,11 +177,11 @@ def calculate_precipitation_factor(precip_chance, pos):
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 1.05
+            return 1.03
         elif precip_chance < 75:
-            return 1.09
+            return 1.05
         else:
-            return 1.12
+            return 1.07
     elif pos == 'K':
         if precip_chance < 25:
             return 1.0
@@ -228,12 +228,15 @@ def compute_team_totals(spread_df):
 
 
 def cap_projection(adjusted_proj, base_score, pos, max_score=27.0,
-                   min_proj_multiplier=0.5, max_def_multiplier=2.0):
+                   min_proj_multiplier=0.5, max_def_multiplier=2.0,
+                   max_proj_multiplier=2.0):
     """Apply the safeguard caps to an adjusted projection."""
     adjusted_proj = min(adjusted_proj, max_score)
     adjusted_proj = max(adjusted_proj, base_score * min_proj_multiplier)
     if pos == 'D':
         adjusted_proj = min(adjusted_proj, base_score * max_def_multiplier)
+    else:
+        adjusted_proj = min(adjusted_proj, base_score * max_proj_multiplier)
     return adjusted_proj
 
 

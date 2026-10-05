@@ -45,7 +45,11 @@ INJURY_FACTOR = .12
 INJURED_QB_BONUS = 2.5
 # Multiplier on the WR-injury pool for a team's remaining WRs: when a WR is
 # out, the other WRs inherit the vacated targets on top of the shared pool.
-WR_INHERITANCE_WEIGHT = 2.0
+WR_INHERITANCE_WEIGHT = 4.0
+# Cap on the per-team WR-injury pool that gets the inheritance multiplier:
+# multiple injured WRs share the same target pie, so their contributions
+# shouldn't stack unboundedly.
+WR_INHERITANCE_CAP = 2.0
 # Multiplier on the opponent's net injury weakness (abs of excluded_bonus)
 # for defenses/MVPs: a weakened opponent offense helps the D.
 OPPONENT_INJURY_WEIGHT = 0.4
@@ -53,6 +57,9 @@ MIN_SCORE = 7
 MAX_SCORE = 29
 MAX_DEF_MULTIPLIER = 2.0
 MIN_PROJ_MULTIPLIER = 0.5
+# Ceiling on how far a projection can rise above its own base (prevents a
+# low-base depth player from being boosted to absurd heights by a flat bonus).
+MAX_PROJ_MULTIPLIER = 2.0
 LOW_SALARY_SKIP = 4200
 MAX_WEATHER_BONUS = 0.40
 
@@ -62,6 +69,9 @@ MAX_WEATHER_BONUS = 0.40
 # total (a defense facing a weak offense scores better).
 OFFENSE_TOTAL_WEIGHT = 0.45      # proj points per point of team-total deviation
 DEFENSE_TOTAL_WEIGHT = 0.60      # proj points per point of opponent-total deviation
+# Weight on the opposing offense's giveaway/sack propensity (in DST-point
+# units) relative to the league average.
+DST_GIVEAWAY_WEIGHT = 1.0
 
 # Fantasy points allowed (FPA) weights
 FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points
@@ -89,8 +99,9 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Christian McCaffrey', 'Case Keenum', 'Cincinnati Bengals', 'Derrick Henry', 'Deebo Samuel Sr.', 'James Cook III', 'Chris Olave', 'Mike Gesicki',
-  'Minnesota Vikings', 'Jahmyr Gibbs', 'Jaxon Smith-Njigba',  'Zay Flowers',
+  # 'Case Keenum','Tyler Shough', 'Deebo Samuel Sr.', 'Brock Bowers', 'Derrick Henry', 'James Cook III', 'Bryce Young', 'Brock Purdy', 'Mike Gesicki', "D'Andre Swift", 'Kalif Raymond',
+  # 'Christian McCaffrey', 'Cincinnati Bengals', 'Chris Olave', 'Chicago Bears', 'George Kittle',
+  # 'Minnesota Vikings', 'Juwan Johnson', 'Rashod Bateman', 'Jakobi Meyers',  'Kyren Williams', 'Las Vegas Raiders', 'Jahmyr Gibbs', 'Tyler Warren', 'Jaxon Smith-Njigba',  'Zay Flowers', 'CeeDee Lamb', 'C.J. Stroud', 'Baltimore Ravens', 'Jordan Watkins'
   # 'Cincinnati Bengals', 'New England Patriots', 'Devaughn Vele', 'Case Keenum', 'CeeDee Lamb', 'Patrick Mahomes',
   # 'Deebo Samuel Sr.', 'Christian McCaffrey', 'Chris Olave', 'Jahmyr Gibbs', 'Minnesota Vikings', "D'Andre Swift", "Kenneth Walker III", "Jaxon Smith-Njigba", "Derrick Henry", "Las Vegas Raiders"
   # 'Seattle Seahawks', 'Jakobi Meyers', 'Jaylen Waddle', 'George Kittle', 'CeeDee Lamb',
@@ -115,23 +126,6 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 ]
 
 LOCKED = [
-  # 'Josh Allen', 'Jeremiyah Love',
-  #'Dontayvion Wicks', 'Jordan Addison',
-  # 'Christian Watson'
-  # 'Bijan Robinson', 'Josh Downs'
-  # 'Brock Purdy'
-  # 'Dalton Schultz'
-  # 'Josh Allen', 'Tennessee Titans', 'Chuba Hubbard',
-  # 'Travis Kelce'
-  # 'Terry McLaurin'
-  # 'Josh Allen',
-  # 'Davante Adams'
-  # 'Matthew Stafford'
-  # 'Travis Kelce', 'David Montgomery'
-  # 'Cincinnati Bengals', 'Josh Allen',
-  # 'Malik Nabers', 'Matthew Stafford'
-  # 'Kenneth Walker III', 'Rashod Bateman', 'Derrick Henry', 'Bijan Robinson', 'Caleb Williams',
-  # 'Bryce Young',
-    # 'New England Patriots'
+
   ]
 BLOCKED_TEAMS = []

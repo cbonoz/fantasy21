@@ -25,7 +25,7 @@ from projection import (
     cap_projection,
     compute_team_totals,
 )
-from nflverse import compute_fpa_map, compute_history, compute_qb_snap_share_map
+from nflverse import compute_fpa_map, compute_giveaway_map, compute_history, compute_qb_snap_share_map
 from sleeper import build_projection_map
 from weather import display_weather_summary, get_nfl_weather
 
@@ -95,6 +95,17 @@ for _entry in fpa_map.values():
     for _pos, _value in _entry.items():
         fpa_baselines.setdefault(_pos, []).append(_value)
 fpa_baselines = {pos: sum(v) / len(v) for pos, v in fpa_baselines.items()}
+
+# Per-offense giveaways/sacks (expected DST big-play points), used to boost a
+# defense facing a turnover-prone offense beyond what the implied total says.
+giveaway_map = {}
+try:
+    giveaway_map = compute_giveaway_map(WEEK) or {}
+    print(f"Using {len(giveaway_map)} matchup giveaway entries")
+except Exception as e:
+    print('Error loading giveaway data:', e)
+    giveaway_map = {}
+giveaway_baseline = (sum(giveaway_map.values()) / len(giveaway_map)) if giveaway_map else 0.0
 
 # ============================================================
 # Vegas spreads / over-unders -> favor_map, team_totals
@@ -227,8 +238,13 @@ wr_bonus = defaultdict(lambda: 0)
 for index, p in questionable_df.iterrows():
     pos = p['Position']
     if pos in ['TE', 'WR', 'RB', 'QB']:
+        # Only definite outs fund injury bonuses: Questionable/Doubtful
+        # players often suit up, so they shouldn't shift projections.
+        indicator = str(p['Injury Indicator']).strip().upper()
+        if indicator not in ('O', 'IR'):
+            continue
         points = p['FPPG']
-        if points > 7.5 and p['Played'] >= WEEK / 2:
+        if points >= 7.5 and p['Played'] >= WEEK / 2:
             injury_offset = min(points * INJURY_FACTOR, INJURY_FACTOR * 10)
             if pos == 'QB':
                 amt = -injury_offset * 2
@@ -382,11 +398,14 @@ def calculate_injury_bonuses(p, opponent):
         bonuses += -excluded_bonus.get(p.team, 0)
     elif p.pos in ['D', 'MVP']:
         bonuses += excluded_bonus.get(p.team, 0) / 2
-    else:
+    elif p.pos != 'WR':
         bonuses += excluded_bonus.get(p.team, 0)
-    # WRs on a team with an injured WR inherit the vacated targets.
+    # WRs on a team with an injured WR inherit the vacated targets INSTEAD of
+    # the shared pool (both would double-count the same vacated production),
+    # split by each WR's share of the team's production.
     if p.pos == 'WR':
-        bonuses += wr_bonus.get(p.team, 0) * config.WR_INHERITANCE_WEIGHT
+        pool = min(wr_bonus.get(p.team, 0), config.WR_INHERITANCE_CAP)
+        bonuses += pool * config.WR_INHERITANCE_WEIGHT * wr_base_shares.get(p.team, {}).get(p.name, 0)
     if p.pos == 'RB' and injured_qb.get(p.team, False):
         bonuses += INJURED_QB_BONUS
     return bonuses
@@ -504,6 +523,13 @@ def calculate_adjusted_projection(p):
     # Vegas implied team total (encodes both spread and game total)
     matchup_bonus += calculate_team_total_bonus(p, opponent)
 
+    # Defenses also collect sacks/turnovers: tilt by how giveaway-prone the
+    # opposing offense has been relative to the league average.
+    if p.pos == 'D':
+        opp_giveaway = giveaway_map.get(opponent)
+        if opp_giveaway is not None and giveaway_baseline > 0:
+            matchup_bonus += (opp_giveaway - giveaway_baseline) * config.DST_GIVEAWAY_WEIGHT
+
     # Fantasy points allowed by opponent's defense
     matchup_bonus += calculate_fpa_bonus(p, opponent)
 
@@ -526,21 +552,32 @@ def calculate_adjusted_projection(p):
         weather_bonus = max(min(weather_bonus, max_weather_bonus), -max_weather_bonus)
         matchup_bonus += weather_bonus
 
-    # Apply with safeguards
-    if p.pos in ['D', 'MVP'] or base_score >= MIN_SCORE:
-        return cap_projection(
-            base_score + matchup_bonus,
-            base_score,
-            p.pos,
-            max_score=MAX_SCORE,
-            min_proj_multiplier=config.MIN_PROJ_MULTIPLIER,
-            max_def_multiplier=config.MAX_DEF_MULTIPLIER,
-        )
-
-    return base_score
+# Apply with safeguards (cap_projection floors low-base players at
+    # MIN_PROJ_MULTIPLIER).
+    return cap_projection(
+        base_score + matchup_bonus,
+        base_score,
+        p.pos,
+        max_score=MAX_SCORE,
+        min_proj_multiplier=config.MIN_PROJ_MULTIPLIER,
+        max_def_multiplier=config.MAX_DEF_MULTIPLIER,
+        max_proj_multiplier=config.MAX_PROJ_MULTIPLIER,
+    )
 
 
 players = salary_download.generate_players_from_csvs(salary_file_location=ACTIVE_FILE, game=rules.FAN_DUEL)
+
+# Each remaining WR's share of the team's WR production: vacated targets flow
+# mostly to the WR who already produces (best proxy for who runs the routes),
+# not equally to every depth WR on the roster.
+wr_base_shares = defaultdict(dict)
+wr_base_totals = defaultdict(float)
+for p in players:
+    if p.pos == 'WR':
+        wr_base_totals[p.team] += float(p.kv_store.get('FPPG') or 0)
+for p in players:
+    if p.pos == 'WR' and wr_base_totals[p.team] > 0:
+        wr_base_shares[p.team][p.name] = (float(p.kv_store.get('FPPG') or 0)) / wr_base_totals[p.team]
 
 for p in players:
     p.proj = calculate_adjusted_projection(p)

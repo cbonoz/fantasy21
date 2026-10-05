@@ -98,6 +98,40 @@ def compute_fpa_map(week, season=None):
     return result
 
 
+def compute_giveaway_map(week, season=None):
+    """
+    Per-offense expected DST big-play points surrendered, from prior weeks:
+    interceptions*2 + fumbles lost*2 + sacks allowed*1. A defense facing a
+    giveaway-prone offense scores more. Returns {offense_team: avg_points}.
+    """
+    cache_file = f"{config.CACHE_FOLDER}/giveaway_week_{week}.json"
+    if os.path.isfile(cache_file):
+        print('return cached data', f"giveaway week {week}")
+        with open(cache_file) as f:
+            return json.load(f)
+
+    prior = prior_week_stats(week, season)
+    per_game = defaultdict(lambda: defaultdict(float))
+    for row in prior.itertuples(index=False):
+        team = normalize_team_abbr(row.team)
+        if not team:
+            continue
+        ints = float(row.passing_interceptions or 0)
+        fumbles = float(row.fumbles_lost_total or 0)
+        sacks = float(row.sacks_suffered or 0)
+        per_game[row.week][team] += 2 * ints + 2 * fumbles + sacks
+
+    acc = defaultdict(list)
+    for _week, teams in per_game.items():
+        for team, pts in teams.items():
+            if pts > 0:
+                acc[team].append(pts)
+    result = {team: round(sum(v) / len(v), 3) for team, v in acc.items() if v}
+    with open(cache_file, 'w') as f:
+        json.dump(result, f)
+    return result
+
+
 def compute_history(week, season=None):
     """
     Prior-week averages of FanDuel points per player (normalized name key) and

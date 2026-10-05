@@ -104,7 +104,11 @@ class TestCapProjection:
         assert cap_projection(25.0, 8.0, 'D', max_def_multiplier=2.0) == 16.0
 
     def test_non_def_ignores_max_multiplier(self):
-        assert cap_projection(25.0, 8.0, 'QB', max_def_multiplier=2.0) == 25.0
+        assert cap_projection(25.0, 8.0, 'QB', max_def_multiplier=2.0, max_proj_multiplier=10.0) == 25.0
+
+    def test_max_proj_ceiling(self):
+        assert cap_projection(25.0, 8.0, 'QB') == 16.0
+        assert cap_projection(25.0, 8.0, 'QB', max_proj_multiplier=3.0) == 24.0
 
     def test_within_bounds_unchanged(self):
         assert cap_projection(21.0, 20.0, 'QB') == 21.0
