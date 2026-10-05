@@ -72,6 +72,9 @@ DEFENSE_TOTAL_WEIGHT = 0.60      # proj points per point of opponent-total devia
 # Weight on the opposing offense's giveaway/sack propensity (in DST-point
 # units) relative to the league average.
 DST_GIVEAWAY_WEIGHT = 1.0
+# Shrinkage games for the opponent-giveaway rate: teams are regressed toward
+# the league mean by this many games, damping small-sample overreaction.
+GIVEAWAY_SHRINKAGE_GAMES = 4.0
 
 # Fantasy points allowed (FPA) weights
 FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points

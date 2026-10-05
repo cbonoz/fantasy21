@@ -103,6 +103,9 @@ def compute_giveaway_map(week, season=None):
     Per-offense expected DST big-play points surrendered, from prior weeks:
     interceptions*2 + fumbles lost*2 + sacks allowed*1. A defense facing a
     giveaway-prone offense scores more. Returns {offense_team: avg_points}.
+
+    Each team's raw rate is regressed toward the league mean (shrinkage) so a
+    small, high-variance early-season sample doesn't overreact.
     """
     cache_file = f"{config.CACHE_FOLDER}/giveaway_week_{week}.json"
     if os.path.isfile(cache_file):
@@ -126,7 +129,15 @@ def compute_giveaway_map(week, season=None):
         for team, pts in teams.items():
             if pts > 0:
                 acc[team].append(pts)
-    result = {team: round(sum(v) / len(v), 3) for team, v in acc.items() if v}
+    raw = {team: sum(v) / len(v) for team, v in acc.items() if v}
+    if not raw:
+        return {}
+    league = sum(raw.values()) / len(raw)
+    k = config.GIVEAWAY_SHRINKAGE_GAMES
+    result = {
+        team: round((len(acc[team]) * rate + k * league) / (len(acc[team]) + k), 3)
+        for team, rate in raw.items()
+    }
     with open(cache_file, 'w') as f:
         json.dump(result, f)
     return result
