@@ -129,6 +129,7 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 ]
 
 LOCKED = [
+  # 'Washington Commanders'
 
   ]
 BLOCKED_TEAMS = []
