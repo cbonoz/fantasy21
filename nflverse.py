@@ -31,10 +31,10 @@ def get_weekly_player_stats(week, season=None):
     cache_file = _cache_path('nflverse', week)
     if os.path.isfile(cache_file):
         print('return cached data', f"nflverse week {week}")
-        return pd.read_csv(cache_file)
+        return pd.read_csv(cache_file, low_memory=False)
     url = f"{NFLVERSE_BASE}/stats_player/stats_player_week_{season}.csv"
     print('fetching data', url)
-    df = pd.read_csv(url)
+    df = pd.read_csv(url, low_memory=False)
     df.to_csv(cache_file, index=False)
     return df
 
@@ -141,6 +141,29 @@ def compute_giveaway_map(week, season=None):
     with open(cache_file, 'w') as f:
         json.dump(result, f)
     return result
+
+
+def compute_upside_map(week, season=None):
+    """
+    Per-player upside: the ~75th-percentile FanDuel-game from prior weeks
+    (falling back to the average). Used to tilt single-game projections toward
+    ceiling, since GPPs/top-10% are won by boom games, not averages.
+    Returns {normalized_name: ceiling_points}.
+    """
+    prior = prior_week_stats(week, season)
+    acc = defaultdict(list)
+    for row in prior.itertuples(index=False):
+        if row.position in OFFENSIVE_POSITIONS:
+            acc[normalize_player_name(row.player_display_name)].append(
+                compute_fd_points(row._asdict(), row.position))
+    upside = {}
+    for name, vals in acc.items():
+        if len(vals) < 1:
+            continue
+        avg = sum(vals) / len(vals)
+        pct = max(vals) if len(vals) < 3 else sorted(vals)[int(len(vals) * 0.75)]
+        upside[name] = round(max(pct, avg), 3)
+    return upside
 
 
 def compute_history(week, season=None):

@@ -2,7 +2,6 @@
 # Run headless with: uv run python draft.py
 
 import copy
-import math
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -25,9 +24,9 @@ from projection import (
     cap_projection,
     compute_team_totals,
 )
-from nflverse import compute_fpa_map, compute_giveaway_map, compute_history, compute_qb_snap_share_map
+from nflverse import compute_fpa_map, compute_giveaway_map, compute_history, compute_qb_snap_share_map, compute_upside_map
 from sleeper import build_projection_map
-from weather import display_weather_summary, get_nfl_weather
+from weather import display_weather_summary, get_nfl_weather, team_name_to_abbr
 
 import config
 
@@ -40,14 +39,17 @@ def get_most_recently_created_file_with_extension(folder, extension):
 def get_week_relative_to_start(season_start=config.SEASON_START):
     start = datetime.strptime(season_start, '%m/%d/%Y')
     today = datetime.today()
-    num_days = (today - start).days + 1
-    return math.ceil(num_days / 7)
+    # Weeks run Tuesday through Monday; a new week triggers on Tuesday.
+    return ((today - start).days + 5) // 7 + 1
 
 
 def get_slate_week_from_file(filepath, season_start=config.SEASON_START):
     """Derive slate week from the FanDuel filename, e.g.
     'FanDuel-NFL-2026 EDT-09 EDT-20 EDT-134251-players-list.csv'
-    encodes year=2026, month=09, slate day=20. Returns None if unparseable."""
+    encodes year=2026, month=09, slate day=20. Returns None if unparseable.
+
+    NFL/fantasy weeks run Tuesday through Monday and trigger on Tuesday, so
+    the slate date is shifted to align with that boundary."""
     import re
     m = re.search(r'NFL-(\d{4}) EDT-(\d{2}) EDT-(\d{2})', os.path.basename(filepath))
     if not m:
@@ -57,10 +59,11 @@ def get_slate_week_from_file(filepath, season_start=config.SEASON_START):
     start = datetime.strptime(season_start, '%m/%d/%Y')
     if slate < start:
         return None
-    return ((slate - start).days // 7) + 1
+    return ((slate - start).days + 5) // 7 + 1
 
 
-SALARY_FILE = f"{config.DATA_FOLDER}/{get_most_recently_created_file_with_extension(config.DATA_FOLDER, 'csv')}"
+SALARY_FILE = (os.environ.get('SALARY_FILE') or
+               f"{config.DATA_FOLDER}/{get_most_recently_created_file_with_extension(config.DATA_FOLDER, 'csv')}")
 WEEK = get_slate_week_from_file(SALARY_FILE) or max(get_week_relative_to_start(), 1)
 ACTIVE_FILE = f"{config.ACTIVE_FOLDER}/data.csv"
 UPLOAD_FILE = f"{config.UPLOAD_FOLDER}/upload.csv"
@@ -139,17 +142,6 @@ team_totals, avg_team_total = compute_team_totals(spread_df)
 weather_df = get_nfl_weather(WEEK)
 
 if not weather_df.empty:
-    team_name_to_abbr = {
-        'Rams': 'LAR', 'Cardinals': 'ARI', 'Falcons': 'ATL', 'Saints': 'NO', 'Panthers': 'CAR',
-        'Bears': 'CHI', 'Lions': 'DET', 'Packers': 'GB', 'Vikings': 'MIN',
-        'Cowboys': 'DAL', 'Eagles': 'PHI', 'Commanders': 'WAS', 'Giants': 'NYG',
-        '49ers': 'SF', 'Seahawks': 'SEA', 'Buccaneers': 'TB',
-        'Bills': 'BUF', 'Dolphins': 'MIA', 'Patriots': 'NE', 'Jets': 'NYJ',
-        'Steelers': 'PIT', 'Browns': 'CLE', 'Ravens': 'BAL', 'Bengals': 'CIN',
-        'Colts': 'IND', 'Texans': 'HOU', 'Jaguars': 'JAC', 'Titans': 'TEN',
-        'Broncos': 'DEN', 'Chiefs': 'KC', 'Chargers': 'LAC', 'Raiders': 'LV',
-        'Washington': 'WAS'
-    }
     weather_df['away_team'] = weather_df['away_team'].apply(lambda t: team_name_to_abbr.get(t, t))
     weather_df['home_team'] = weather_df['home_team'].apply(lambda t: team_name_to_abbr.get(t, t))
 
@@ -284,7 +276,7 @@ ACTIVE_RULE_SET.defensive_positions = ['D', 'DEF']
 ACTIVE_RULE_SET.offensive_positions = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'WR/FLEX', 'K', 'MVP'] if SINGLE_GAME else ['QB', 'RB', 'WR', 'TE', 'FLEX', 'WR/FLEX', 'K']
 ACTIVE_RULE_SET.position_limits = get_nfl_positions()
 if SINGLE_GAME:
-    ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
+    ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET_SINGLE
 else:
     ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
     ACTIVE_RULE_SET.max_players_per_team = config.MAX_PLAYERS_PER_TEAM_CLASSIC
@@ -471,19 +463,24 @@ if not weather_df.empty:
 
 # Flag any slate team that got no weather factor despite playing at an
 # outdoor venue: the weather cache is stale, missing, or corrupted (e.g. a
-# row whose matchup doesn't match the salary file). Teams playing in a
-# roofed stadium are weather-immune and correctly have no factor.
+# row whose matchup doesn't match the salary file, or a cache for the wrong
+# week). Teams playing in a roofed stadium are weather-immune and correctly
+# have no factor.
 if not SINGLE_GAME:
     missing_weather = []
+    outdoor_teams = 0
     for t in set(df['Team']):
         game = df.loc[df['Team'] == t, 'Game'].iloc[0]
         home = str(game).split('@')[-1].strip()
         if home in config.ROOFED_TEAMS:
             continue
+        outdoor_teams += 1
         if (t, 'QB') not in weather_factor_map:
             missing_weather.append(t)
     if missing_weather:
-        print(f"WARNING: no weather factor for teams: {sorted(missing_weather)} — weather cache likely stale/mismatched")
+        frac = len(missing_weather) / max(outdoor_teams, 1)
+        diagnose = "weather cache likely for a DIFFERENT week" if frac > 0.4 else "weather cache likely stale/mismatched"
+        print(f"WARNING: no weather factor for {len(missing_weather)}/{outdoor_teams} outdoor teams: {sorted(missing_weather)} — {diagnose}")
 
 
 def get_opponent(p):
@@ -583,6 +580,17 @@ for p in players:
     p.proj = calculate_adjusted_projection(p)
     p.kv_store['adjusted_proj'] = p.proj
 
+# Single-game: tilt projections toward each player's observed ceiling, since
+# single-game winners are decided by boom games rather than averages.
+if SINGLE_GAME and config.SHOWDOWN_UPSIDE_WEIGHT > 0:
+    upside_map = compute_upside_map(WEEK) or {}
+    w = config.SHOWDOWN_UPSIDE_WEIGHT
+    for p in players:
+        ceiling = upside_map.get(normalize_player_name(p.name))
+        if ceiling:
+            p.proj = min((1 - w) * p.proj + w * ceiling, config.SHOWDOWN_MAX_SCORE)
+    print(f"Applied {len(upside_map)} single-game upside adjustments (weight {w})")
+
 # Single-game slates: create 1.5x-salary/1.5x-projection MVP variants
 if SINGLE_GAME:
     mvp_players = []
@@ -618,7 +626,7 @@ for p in players:
         mvps.append((p.name, p.proj, p.cost, p.proj / p.cost, p.pos, base_fppg, opponent))
     elif p.pos == 'D':
         defenses.append((p.team, p.proj, p.cost, p.proj / p.cost, base_fppg, favor_map.get(p.team, 0), opponent))
-    elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY:
+    elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY and p.proj > 0:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
         weather = float(p.kv_store.get('weather_factor', 1.0))
@@ -648,9 +656,9 @@ if SINGLE_GAME:
     for name, proj, cost, value, pos, base_fppg, games_played, opp, status in filtered_mvps[:10]:
         print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {base_fppg:>8.2f} {(value * 1000):>7.1f}x {games_played:>7.0f} {opp:>5} {status:<10}")
 
-print("\n" + "=" * 105)
+print("\n" + "=" * 115)
 print("SORTED QBs")
-print("=" * 105)
+print("=" * 115)
 print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Weather':>8}")
 print("-" * 115)
 for name, proj, cost, value, team_total, total_deviation, base_fppg, opp, team, weather in sorted(qbs, key=lambda x: x[3], reverse=True):
@@ -863,6 +871,48 @@ if roster:
     print_optimized_roster(roster)
 else:
     print("No solution")
+
+# ============================================================
+# Multi-lineup mode: generate N diversified lineups (GPP exposure).
+# Set NUM_LINEUPS=<n> to enable; each player is capped so no single
+# player appears in too many of the entries.
+# ============================================================
+
+NUM_LINEUPS = int(os.environ.get('NUM_LINEUPS') or (config.DEFAULT_SINGLE_LINEUPS if SINGLE_GAME else 0))
+if NUM_LINEUPS > 1 and roster:
+    # GPP entries: start from the optimal, then rotate out each lineup's three
+    # lowest-ceiling players so every entry is a distinct bet while the high
+    # upside core (and the MVP pick) is decided freely by the solver.
+    order = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'D': 4, 'MVP': 5, 'FLEX': 6}
+    banned_accum = list(BANNED)
+    rosters = [roster]
+    for _ in range(NUM_LINEUPS - 1):
+        prev = rosters[-1]
+        banned_accum += [p.name for p in sorted(prev.players, key=lambda x: x.proj)[:3]]
+        c = LineupConstraints(locked=[], banned=banned_accum)
+        r = run(
+            rule_set=ACTIVE_RULE_SET,
+            player_pool=players,
+            verbose=False,
+            optimizer_settings=build_optimizer_settings(players, block_function),
+            constraints=c,
+        )
+        if not r:
+            break
+        rosters.append(r)
+    rosters = sorted(rosters, key=get_score, reverse=True)
+    print(f"\nCompared {len(rosters)} diversified lineups; showing the top (set DEBUG=1 to list all)")
+    if os.environ.get('DEBUG'):
+        print("\n" + "=" * 100)
+        print(f"TOP {len(rosters)} DIVERSIFIED LINEUPS (low-ceiling slots rotated out)")
+        print("=" * 100)
+        for i, r in enumerate(rosters, 1):
+            total = get_score(r)
+            names = ' | '.join(
+                f"{p.name.replace(' (MVP)', '')}({p.pos})" for p in sorted(r.players, key=lambda x: order.get(x.pos, 9))
+            )
+            print(f"{i:>2}. {total:>6.2f}  {names}")
+        print("=" * 100)
 
 # ============================================================
 # Diversity analysis (classic slates only)

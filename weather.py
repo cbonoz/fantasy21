@@ -7,6 +7,23 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 
 import config
+from projection import (
+    calculate_precipitation_factor,
+    calculate_temperature_factor,
+    calculate_wind_factor,
+)
+
+team_name_to_abbr = {
+    'Rams': 'LAR', 'Cardinals': 'ARI', 'Falcons': 'ATL', 'Saints': 'NO', 'Panthers': 'CAR',
+    'Bears': 'CHI', 'Lions': 'DET', 'Packers': 'GB', 'Vikings': 'MIN',
+    'Cowboys': 'DAL', 'Eagles': 'PHI', 'Commanders': 'WAS', 'Giants': 'NYG',
+    '49ers': 'SF', 'Seahawks': 'SEA', 'Buccaneers': 'TB',
+    'Bills': 'BUF', 'Dolphins': 'MIA', 'Patriots': 'NE', 'Jets': 'NYJ',
+    'Steelers': 'PIT', 'Browns': 'CLE', 'Ravens': 'BAL', 'Bengals': 'CIN',
+    'Colts': 'IND', 'Texans': 'HOU', 'Jaguars': 'JAC', 'Titans': 'TEN',
+    'Broncos': 'DEN', 'Chiefs': 'KC', 'Chargers': 'LAC', 'Raiders': 'LV',
+    'Washington': 'WAS',
+}
 
 def parse_weather_data(html_content):
     """Parse HTML content from NFLWeather.com and extract weather data for each game."""
@@ -272,89 +289,74 @@ def get_nfl_weather(week=None, season=None):
 def display_weather_summary(weather_df):
     """
     Display weather conditions and their impact on positions.
-    
-    @param weather_df: DataFrame with weather data from get_nfl_weather()
+
+    The impact shown is derived from the SAME projection factors the optimizer
+    uses (wind x temp x precip per position), so it never contradicts the
+    actual lineup adjustments. Games in domed/roofed venues are marked
+    weather-immune. Missing forecast values render as N/A.
     """
     if weather_df.empty:
         print("No weather data available to display")
         return
-    
-    # Display weather conditions and their impact on positions
-    print("\n" + "="*120)
+
+    print("\n" + "=" * 120)
     print("WEATHER CONDITIONS BY TEAM AND POSITION IMPACT")
-    print("="*120)
+    print("=" * 120)
 
     weather_summary = {}
     for _, game in weather_df.iterrows():
         for team in [game.get('away_team'), game.get('home_team')]:
-            # Only process if team is a valid string (not None, NaN, or numeric)
             if team and isinstance(team, str) and team not in weather_summary:
-                weather_info = {
+                weather_summary[team] = {
                     'temp': game.get('temperature'),
                     'wind': game.get('wind_speed'),
                     'precip': game.get('precipitation_chance'),
                     'condition': game.get('condition'),
-                    'is_home': team == game.get('home_team')
+                    'is_home': team == game.get('home_team'),
+                    'home_team': game.get('home_team'),
                 }
-                weather_summary[team] = weather_info
 
-    # Display weather by team with position impact
     print(f"{'Team':<8} {'Temp':<8} {'Wind':<8} {'Precip':<10} {'Condition':<12} {'Home/Away':<10} {'Impact on Positions':<50}")
-    print("-"*120)
+    print("-" * 120)
 
     for team in sorted(weather_summary.keys()):
         info = weather_summary[team]
-        temp = f"{info['temp']}°F" if info['temp'] else "N/A"
-        wind = f"{info['wind']}mph" if info['wind'] else "N/A"
-        precip = f"{info['precip']}%" if info['precip'] else "N/A"
+        temp = fmt_weather(info['temp'], '°F')
+        wind = fmt_weather(info['wind'], 'mph')
+        precip = fmt_weather(info['precip'], '%')
         home_away = "HOME" if info['is_home'] else "AWAY"
-        condition = info['condition'] or "N/A"
+        cond = info['condition']
+        condition = (str(cond).capitalize()
+                     if cond is not None and not (isinstance(cond, float) and np.isnan(cond))
+                     else "N/A")
 
-        # Position impact summary - prioritize primary weather factors to avoid double counting
-        impacts = set()  # Use set to avoid duplicates
-
-        # Cold weather (<30°F) is the dominant factor - hurts all offense
-        if info['temp'] and info['temp'] < 30:
-            impacts.add("QB↓")  # QB penalized in cold
-            impacts.add("WR↓")  # WR penalized in cold
-            impacts.add("RB↓")  # RB efficiency reduced in cold
-        # If not cold, check other factors
+        home_abbr = team_name_to_abbr.get(str(info['home_team']), str(info['home_team']))
+        if home_abbr in config.ROOFED_TEAMS:
+            impact_str = "Dome - weather-immune"
         else:
-            # Moderate wind (>8mph) favors running game, hurts passing
-            if info['wind'] and info['wind'] > 8:
-                impacts.add("RB↑")  # RB benefits from wind
-                impacts.add("QB/WR↓")  # QB/WR penalized
-
-        # Any precipitation (>15%) hurts passing game - add only if not already cold and condition is not clear
-        is_clear_condition = condition and 'clear' in str(condition).lower()
-        if info['precip'] and info['precip'] > 15 and not (info['temp'] and info['temp'] < 30) and not is_clear_condition:
-            impacts.add("QB↓")  # QB penalized by rain/snow
-            impacts.add("WR↓")  # WR penalized by rain/snow
-
-        # Warm/hot weather (>85°F) benefits passing game, increases scoring
-        if info['temp'] and info['temp'] > 85:
-            impacts.add("QB↑")  # QB benefits from warm
-            impacts.add("WR↑")  # WR benefits from warm
-
-        # Ideal passing conditions: low wind (<5mph), low precip, moderate temp (30-85°F)
-        has_low_wind = info['wind'] is None or (isinstance(info['wind'], (int, float)) and info['wind'] <= 5)
-        has_low_precip = info['precip'] is None or (isinstance(info['precip'], (int, float)) and info['precip'] <= 15) or (isinstance(info['precip'], float) and np.isnan(info['precip']))
-        has_moderate_temp = info['temp'] is None or (isinstance(info['temp'], (int, float)) and 30 <= info['temp'] <= 85)
-
-        if has_low_wind and has_low_precip and has_moderate_temp and not impacts:
-            impacts.add("QB↑")  # QB benefits from clear conditions
-            impacts.add("WR↑")  # WR benefits from clear conditions
-
-        # Sort impacts for consistent display: positive first, then negative
-        impact_list = sorted(impacts, key=lambda x: (x[-1] != '↑', x))
-        impact_str = " ".join(impact_list) if impact_list else "Neutral"
+            parts = []
+            for pos, label in (('QB', 'QB'), ('WR', 'WR'), ('TE', 'TE'), ('RB', 'RB'), ('D', 'D'), ('K', 'K')):
+                factor = (calculate_wind_factor(info['wind'], pos)
+                          * calculate_temperature_factor(info['temp'], pos)
+                          * calculate_precipitation_factor(info['precip'], pos))
+                if factor >= 1.02:
+                    parts.append(f"{label}↑")
+                elif factor <= 0.98:
+                    parts.append(f"{label}↓")
+            impact_str = " ".join(parts) if parts else "Neutral"
 
         print(f"{team:<8} {temp:<8} {wind:<8} {precip:<10} {condition:<12} {home_away:<10} {impact_str:<50}")
 
-    print("="*120)
+    print("=" * 120)
     print("\nPosition Impact Legend:")
-    print("  RB↑ = Running Backs benefit (wind favors rushing)")
-    print("  QB↑/WR↑ = Quarterbacks/Wide Receivers benefit (warm weather, clear conditions)")
-    print("  QB↓/WR↓ = Quarterbacks/Wide Receivers penalized (high wind, cold, or rain/snow hurts passing)")
-    print("  RB↓ = Running Backs efficiency reduced (cold weather)")
-    print("="*120)
+    print("  Based on the exact projection factors: QB↓/WR↓ = passing penalized (rain/wind/cold),")
+    print("  RB↑ = running boosted (rain/wind), K↓ = kicking penalized, D↑ = defense boosted.")
+    print("  'Dome - weather-immune' = played in a covered stadium, no weather adjustment.")
+    print("=" * 120)
+
+
+def fmt_weather(value, suffix):
+    """Format a weather value or render N/A for missing/NaN data."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return "N/A"
+    return f"{value}{suffix}"

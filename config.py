@@ -39,6 +39,14 @@ MAX_PLAYERS_PER_TEAM_CLASSIC = 9
 WEIGHTED = True
 AVERAGE_WEIGHT = .5
 INJURY_FACTOR = .12
+# Single-game only: blend projections toward each player's observed ceiling so
+# the optimizer targets boom scores (needed for winning/top-10% GPP finishes)
+# instead of point-expectation averages.
+SHOWDOWN_UPSIDE_WEIGHT = 0.6
+SHOWDOWN_MAX_SCORE = 38.0
+# Single-game defaults to printing several diversified GPP entries. Override
+# with NUM_LINEUPS=<n> (or NUM_LINEUPS=1 to get only the single lineup).
+DEFAULT_SINGLE_LINEUPS = 6
 # Bonus when a team's starting QB is out. Full value to defenses/MVPs facing
 # the injured QB (backup-QB matchups are a strong DST edge); half to skill
 # players (game-script benefit); RBs get full when their OWN QB is out.
@@ -102,6 +110,8 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
+  'Davante Adams', 'Mike Gesicki', 'DJ Moore', 'Jakobi Meyers', 'Pat Freiermuth', 'T.J. Hockenson', 'Cincinnati Bengals',
+  'Amon-Ra St. Brown', 'Juwan Johnson', 'Bijan Robinson', 'Minnesota Vikings', 'Kalif Raymond', 'Deebo Samuel Sr.'
   # 'Case Keenum','Tyler Shough', 'Deebo Samuel Sr.', 'Brock Bowers', 'Derrick Henry', 'James Cook III', 'Bryce Young', 'Brock Purdy', 'Mike Gesicki', "D'Andre Swift", 'Kalif Raymond',
   # 'Christian McCaffrey', 'Cincinnati Bengals', 'Chris Olave', 'Chicago Bears', 'George Kittle',
   # 'Minnesota Vikings', 'Juwan Johnson', 'Rashod Bateman', 'Jakobi Meyers',  'Kyren Williams', 'Las Vegas Raiders', 'Jahmyr Gibbs', 'Tyler Warren', 'Jaxon Smith-Njigba',  'Zay Flowers', 'CeeDee Lamb', 'C.J. Stroud', 'Baltimore Ravens', 'Jordan Watkins'
@@ -129,6 +139,7 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 ]
 
 LOCKED = [
+  'Jared Goff'
   # 'Washington Commanders'
 
   ]
