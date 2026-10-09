@@ -47,6 +47,11 @@ SHOWDOWN_MAX_SCORE = 38.0
 # Single-game defaults to printing several diversified GPP entries. Override
 # with NUM_LINEUPS=<n> (or NUM_LINEUPS=1 to get only the single lineup).
 DEFAULT_SINGLE_LINEUPS = 6
+# Sneaky-upside detection: flags cheap players whose observed ceiling vaults
+# well above their current projection (low-rostered boom candidates).
+SHOWDOWN_SNEAKY_MAX_COST = 6000
+SHOWDOWN_SNEAKY_MIN_UPSIDE = 1.25     # ceiling must be >= this multiple of proj
+SHOWDOWN_SNEAKY_TOP = 8
 # Bonus when a team's starting QB is out. Full value to defenses/MVPs facing
 # the injured QB (backup-QB matchups are a strong DST edge); half to skill
 # players (game-script benefit); RBs get full when their OWN QB is out.
@@ -110,8 +115,9 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  # 'Davante Adams', 'James Cook III', 'DJ Moore', 'Jakobi Meyers', 'Pat Freiermuth', 'T.J. Hockenson', 'Cincinnati Bengals', 'Dalton Kincaid', 'Garrett Wilson',
-  # 'Amon-Ra St. Brown', 'Puka Nacua', 'Keon Coleman', 'Juwan Johnson', 'Bijan Robinson', 'Minnesota Vikings', 'Kalif Raymond', 'Deebo Samuel Sr.', 'Roman Wilson', 'Treylon Burks'
+  'Davante Adams', 'James Cook III', 'DJ Moore', 'Jakobi Meyers', 'Cincinnati Bengals', 'Dalton Kincaid', 'Garrett Wilson',
+  'Amon-Ra St. Brown', 'Puka Nacua', 'Keon Coleman', 'Juwan Johnson', 'Bijan Robinson', 'Minnesota Vikings', 'Kalif Raymond',
+    'Deebo Samuel Sr.', 'Brock Bowers', 'Roman Wilson', 'Mike Gesicki', 'TreVeyon Henderson', 'Treylon Burks', 'Brian Robinson Jr.', 'Jonathan Taylor'
   # 'Case Keenum','Tyler Shough', 'Deebo Samuel Sr.', 'Brock Bowers', 'Derrick Henry', 'James Cook III', 'Bryce Young', 'Brock Purdy', 'Mike Gesicki', "D'Andre Swift", 'Kalif Raymond',
   # 'Christian McCaffrey', 'Cincinnati Bengals', 'Chris Olave', 'Chicago Bears', 'George Kittle',
   # 'Minnesota Vikings', 'Juwan Johnson', 'Rashod Bateman', 'Jakobi Meyers',  'Kyren Williams', 'Las Vegas Raiders', 'Jahmyr Gibbs', 'Tyler Warren', 'Jaxon Smith-Njigba',  'Zay Flowers', 'CeeDee Lamb', 'C.J. Stroud', 'Baltimore Ravens', 'Jordan Watkins'
@@ -132,7 +138,7 @@ BANNED_CLASSIC = [
   #  'Seattle Seahawks', 'Tampa Bay Buccaneers', 'San Francisco 49ers', 'Justin Jefferson'
 #   'Jared Goff', 'Chris Olave', 'Seattle Seahawks', 'KC Concepcion', 'Dallas Goedert', 'Deebo Samuel Sr.', 'Demarcus Robinson', 'Mark Andrews', 'Denver Broncos', 'Tennessee Titans'
 ]
-BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
+BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III','Kirk Cousins (MVP)', 'Las Vegas Raiders (MVP)'
   # 'Kenneth Walker III (MVP)'
   # 'Los Angeles Rams', 'Ronnie Rivers', 'Devin Singletary', 'Terrance Ferguson'
   # 'DJ Moore (MVP)', 'Jahmyr Gibbs (MVP)'
@@ -141,7 +147,13 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 LOCKED = [
   'Jared Goff',
   'Washington Commanders',
-  'Michael Wilson','Emanuel Wilson'
+  'Michael Wilson',
+  # 'Drake Maye (MVP)',
+  # 'Michael Mayer'
+  # 'Braelon Allen',
+  # 'Jaxon Smith-Njigba',
+  # 'Aaron Jones Sr.',
+  # 'Emanuel Wilson'
 
   ]
 BLOCKED_TEAMS = []

@@ -581,7 +581,9 @@ for p in players:
     p.kv_store['adjusted_proj'] = p.proj
 
 # Single-game: tilt projections toward each player's observed ceiling, since
-# single-game winners are decided by boom games rather than averages.
+# single-game winners are decided by boom games rather than averages. Also
+# surface cheap players whose ceiling dwarfs their cost (sneaky upside).
+sneaky_upside_plays = []
 if SINGLE_GAME and config.SHOWDOWN_UPSIDE_WEIGHT > 0:
     upside_map = compute_upside_map(WEEK) or {}
     w = config.SHOWDOWN_UPSIDE_WEIGHT
@@ -589,6 +591,19 @@ if SINGLE_GAME and config.SHOWDOWN_UPSIDE_WEIGHT > 0:
         ceiling = upside_map.get(normalize_player_name(p.name))
         if ceiling:
             p.proj = min((1 - w) * p.proj + w * ceiling, config.SHOWDOWN_MAX_SCORE)
+    for p in players:
+        if p.cost > config.SHOWDOWN_SNEAKY_MAX_COST or p.cost <= 0:
+            continue
+        ceiling = upside_map.get(normalize_player_name(p.name))
+        if not ceiling:
+            continue
+        if ceiling < p.proj * config.SHOWDOWN_SNEAKY_MIN_UPSIDE:
+            continue
+        sneaky_upside_plays.append((
+            p.name, p.pos, int(p.cost), round(p.proj, 2), round(ceiling, 2),
+            round(ceiling / p.cost * 1000, 1),
+        ))
+    sneaky_upside_plays.sort(key=lambda x: -x[5])
     print(f"Applied {len(upside_map)} single-game upside adjustments (weight {w})")
 
 # Single-game slates: create 1.5x-salary/1.5x-projection MVP variants
@@ -598,7 +613,7 @@ if SINGLE_GAME:
         mvp = copy.deepcopy(p)
         mvp.pos = 'MVP'
         mvp.cost = int(round(p.cost * 1.5))
-        mvp.proj = p.kv_store.get('adjusted_proj', p.proj) * 1.5
+        mvp.proj = p.proj * 1.5
         mvp.name = p.name + ' (MVP)'
         mvp.kv_store['base_name'] = p.name
         mvp.kv_store['base_pos'] = p.pos
@@ -865,6 +880,16 @@ def print_optimized_roster(roster):
     print(f"{'TOTAL':<6} {'':<24} {'':<5} ${total_salary:,} {'':<12} {get_score(roster):<15.2f}")
     print("-" * 3)
 
+
+if sneaky_upside_plays:
+    print("\n" + "=" * 100)
+    print("SNEAKY UPSIDE PLAYS (cheap, ceiling >> cost - low-rostered boom candidates)")
+    print("=" * 100)
+    print(f"{'Player':<26} {'Pos':<4} {'Salary':>8} {'Proj':>7} {'Ceiling':>8} {'Ceil/$1k':>8}")
+    print("-" * 100)
+    for name, pos, cost, proj, ceiling, uptv in sneaky_upside_plays[:config.SHOWDOWN_SNEAKY_TOP]:
+        print(f"{name:<26} {pos:<4} ${cost:>7,} {proj:>7.2f} {ceiling:>8.2f} {uptv:>7.1f}x")
+    print("=" * 100)
 
 roster = optimize_lineup(players)
 if roster:
