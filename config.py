@@ -39,6 +39,9 @@ MAX_PLAYERS_PER_TEAM_CLASSIC = 9
 WEIGHTED = True
 AVERAGE_WEIGHT = .5
 INJURY_FACTOR = .12
+# Partial credit for Questionable players (they often play, but a banged-up
+# starter still creates teammate opportunity). Out/IR get 1.0; Doubtful is 0.
+INJURY_QUESTIONABLE_WEIGHT = 0.4
 # Single-game only: blend projections toward each player's observed ceiling so
 # the optimizer targets boom scores (needed for winning/top-10% GPP finishes)
 # instead of point-expectation averages.

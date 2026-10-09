@@ -230,23 +230,26 @@ wr_bonus = defaultdict(lambda: 0)
 for index, p in questionable_df.iterrows():
     pos = p['Position']
     if pos in ['TE', 'WR', 'RB', 'QB']:
-        # Only definite outs fund injury bonuses: Questionable/Doubtful
-        # players often suit up, so they shouldn't shift projections.
+        # Out (O) / Injured Reserve fund full bonuses; Questionable (Q) funds a
+        # partial credit (they often play, but banged-up or out triggers real
+        # opportunity for teammates). Doubtful (D) is too uncertain, skip.
         indicator = str(p['Injury Indicator']).strip().upper()
-        if indicator not in ('O', 'IR'):
+        if indicator not in ('O', 'IR', 'Q'):
             continue
         points = p['FPPG']
         if points >= 7.5 and p['Played'] >= WEEK / 2:
+            weight = config.INJURY_QUESTIONABLE_WEIGHT if indicator == 'Q' else 1.0
             injury_offset = min(points * INJURY_FACTOR, INJURY_FACTOR * 10)
             if pos == 'QB':
-                amt = -injury_offset * 2
-                injured_qb[p['Team']] = True
+                amt = -injury_offset * 2 * weight
+                if weight >= 1.0:
+                    injured_qb[p['Team']] = True
             elif pos in ('RB', 'WR', 'TE'):
-                amt = injury_offset * 1.2
+                amt = injury_offset * 1.2 * weight
                 if pos == 'WR':
                     wr_bonus[p['Team']] += amt
             else:
-                amt = injury_offset
+                amt = injury_offset * weight
             excluded_bonus[p['Team']] += amt
 
 # ============================================================
