@@ -110,8 +110,8 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Davante Adams', 'Mike Gesicki', 'DJ Moore', 'Jakobi Meyers', 'Pat Freiermuth', 'T.J. Hockenson', 'Cincinnati Bengals',
-  'Amon-Ra St. Brown', 'Juwan Johnson', 'Bijan Robinson', 'Minnesota Vikings', 'Kalif Raymond', 'Deebo Samuel Sr.'
+  # 'Davante Adams', 'James Cook III', 'DJ Moore', 'Jakobi Meyers', 'Pat Freiermuth', 'T.J. Hockenson', 'Cincinnati Bengals', 'Dalton Kincaid', 'Garrett Wilson',
+  # 'Amon-Ra St. Brown', 'Puka Nacua', 'Keon Coleman', 'Juwan Johnson', 'Bijan Robinson', 'Minnesota Vikings', 'Kalif Raymond', 'Deebo Samuel Sr.', 'Roman Wilson', 'Treylon Burks'
   # 'Case Keenum','Tyler Shough', 'Deebo Samuel Sr.', 'Brock Bowers', 'Derrick Henry', 'James Cook III', 'Bryce Young', 'Brock Purdy', 'Mike Gesicki', "D'Andre Swift", 'Kalif Raymond',
   # 'Christian McCaffrey', 'Cincinnati Bengals', 'Chris Olave', 'Chicago Bears', 'George Kittle',
   # 'Minnesota Vikings', 'Juwan Johnson', 'Rashod Bateman', 'Jakobi Meyers',  'Kyren Williams', 'Las Vegas Raiders', 'Jahmyr Gibbs', 'Tyler Warren', 'Jaxon Smith-Njigba',  'Zay Flowers', 'CeeDee Lamb', 'C.J. Stroud', 'Baltimore Ravens', 'Jordan Watkins'
@@ -139,8 +139,9 @@ BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III'
 ]
 
 LOCKED = [
-  'Jared Goff'
-  # 'Washington Commanders'
+  'Jared Goff',
+  'Washington Commanders',
+  'Michael Wilson','Emanuel Wilson'
 
   ]
 BLOCKED_TEAMS = []
