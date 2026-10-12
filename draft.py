@@ -71,6 +71,42 @@ UPLOAD_FILE = f"{config.UPLOAD_FOLDER}/upload.csv"
 WEIGHTED = config.WEIGHTED
 MAX_SALARY = config.MAX_SALARY
 
+# Data-source resilience: every external pull records its status here and the
+# run degrades gracefully (missing data -> neutral), then reports what failed.
+DATA_STATUS = {}
+
+
+def _record_source(name, ok, detail=''):
+    """Record whether an external data source loaded OK or failed/missing."""
+    DATA_STATUS[name] = ('OK' if ok else 'MISSING / DEGRADED', detail)
+
+
+def print_banner(title, width):
+    """Print a '='-delimited section banner."""
+    print("\n" + "=" * width)
+    print(title)
+    print("=" * width)
+
+
+def print_table(title, header, rows, width):
+    """Print a banner, a column header, a rule, then preformatted rows."""
+    print_banner(title, width)
+    print(header)
+    print("-" * width)
+    for row in rows:
+        print(row)
+
+
+def print_data_status():
+    """Print a summary of which external data sources loaded OK vs failed."""
+    print_banner("DATA SOURCES", 60)
+    if not DATA_STATUS:
+        print("  (no sources tracked)")
+    for name in sorted(DATA_STATUS):
+        status, detail = DATA_STATUS[name]
+        print(f"  {name:<20} {status:<18} {detail}")
+    print("=" * 60)
+
 # ============================================================
 # Load salary data
 # ============================================================
@@ -86,8 +122,10 @@ print('ready', SALARY_FILE, WEEK)
 fpa_map = {}
 try:
     fpa_map = compute_fpa_map(WEEK) or {}
+    _record_source('FPA', bool(fpa_map), f"{len(fpa_map)} entries")
     print(f"Using {len(fpa_map)} FPA entries")
 except Exception as e:
+    _record_source('FPA', False, str(e))
     print('Error loading FPA data:', e)
     fpa_map = {}
 
@@ -104,8 +142,10 @@ fpa_baselines = {pos: sum(v) / len(v) for pos, v in fpa_baselines.items()}
 giveaway_map = {}
 try:
     giveaway_map = compute_giveaway_map(WEEK) or {}
+    _record_source('Giveaways', bool(giveaway_map), f"{len(giveaway_map)} entries")
     print(f"Using {len(giveaway_map)} matchup giveaway entries")
 except Exception as e:
+    _record_source('Giveaways', False, str(e))
     print('Error loading giveaway data:', e)
     giveaway_map = {}
 giveaway_baseline = (sum(giveaway_map.values()) / len(giveaway_map)) if giveaway_map else 0.0
@@ -114,7 +154,14 @@ giveaway_baseline = (sum(giveaway_map.values()) / len(giveaway_map)) if giveaway
 # Vegas spreads / over-unders -> favor_map, team_totals
 # ============================================================
 
-spread_df = get_metabet_spread(WEEK)
+spread_df = pd.DataFrame()
+try:
+    spread_df = get_metabet_spread(WEEK)
+    _record_source('Spreads', spread_df is not None and not spread_df.empty, f"{len(spread_df)} games")
+except Exception as e:
+    _record_source('Spreads', False, str(e))
+    print('Error loading spread data:', e)
+    spread_df = pd.DataFrame()
 
 # Vegas convention: PointSpread is from the home team's perspective.
 # Negative = home favored, positive = home unfavored.
@@ -140,6 +187,10 @@ team_totals, avg_team_total = compute_team_totals(spread_df)
 # ============================================================
 
 weather_df = get_nfl_weather(WEEK)
+if weather_df.empty:
+    _record_source('Weather', False, 'no data for this week')
+else:
+    _record_source('Weather', True, f"{len(weather_df)} games")
 
 if not weather_df.empty:
     weather_df['away_team'] = weather_df['away_team'].apply(lambda t: team_name_to_abbr.get(t, t))
@@ -175,8 +226,10 @@ df = df[~df['Name'].isin(excluded_players)]
 historic_averages = {}
 try:
     historic_averages = compute_history(WEEK) or {}
+    _record_source('History (nflverse)', bool(historic_averages), f"{len(historic_averages)} entries")
     print(f"Using {len(historic_averages)} nflverse history entries")
 except Exception as e:
+    _record_source('History (nflverse)', False, str(e))
     print('Error loading nflverse history:', e)
     historic_averages = {}
 
@@ -187,8 +240,10 @@ except Exception as e:
 sleeper_proj_map = {}
 try:
     sleeper_proj_map = build_projection_map(WEEK) or {}
+    _record_source('Sleeper', bool(sleeper_proj_map), f"{len(sleeper_proj_map)} projections")
     print(f"Loaded {len(sleeper_proj_map)} Sleeper projections")
 except Exception as e:
+    _record_source('Sleeper', False, str(e))
     print('Error loading Sleeper projections:', e)
     sleeper_proj_map = {}
 
@@ -199,8 +254,10 @@ except Exception as e:
 fp_proj_map = {}
 try:
     fp_proj_map = build_fp_projection_map(WEEK) or {}
+    _record_source('FantasyPros', bool(fp_proj_map), f"{len(fp_proj_map)} projections")
     print(f"Loaded {len(fp_proj_map)} FantasyPros projections")
 except Exception as e:
+    _record_source('FantasyPros', False, str(e))
     print('Error loading FantasyPros projections:', e)
     fp_proj_map = {}
 
@@ -212,9 +269,13 @@ qb_snap_share_map = {}
 if config.USE_SNAP_BACKUP:
     try:
         qb_snap_share_map = compute_qb_snap_share_map(WEEK) or {}
+        _record_source('Snap counts', bool(qb_snap_share_map), f"{len(qb_snap_share_map)} QBs")
     except Exception as e:
+        _record_source('Snap counts', False, str(e))
         print('Error loading snap counts:', e)
         qb_snap_share_map = {}
+else:
+    _record_source('Snap counts', False, 'disabled (USE_SNAP_BACKUP=False)')
 
 # ============================================================
 # Injury bonuses
@@ -515,6 +576,7 @@ def calculate_adjusted_projection(p):
         if secondary is not None:
             weight = config.SLEEPER_WEIGHT if source is sleeper_projection_for else config.FANTASYPROS_WEIGHT
             base_score = blend_projections(base_score, secondary, weight)
+    p.kv_store['base_proj'] = base_score
 
     opponent = get_opponent(p)
 
@@ -583,31 +645,46 @@ for p in players:
     p.proj = calculate_adjusted_projection(p)
     p.kv_store['adjusted_proj'] = p.proj
 
-# Single-game: tilt projections toward each player's observed ceiling, since
-# single-game winners are decided by boom games rather than averages. Also
-# surface cheap players whose ceiling dwarfs their cost (sneaky upside).
+# GPP upside tilt: blend projections toward each player's ceiling so lineups
+# target boom scores (single-game winners / top-10% GPP finishes) instead of
+# point-expectation averages. Also surfaces cheap high-ceiling plays.
+upside_weight = config.SHOWDOWN_UPSIDE_WEIGHT if SINGLE_GAME else config.GPP_UPSIDE_WEIGHT
 sneaky_upside_plays = []
-if SINGLE_GAME and config.SHOWDOWN_UPSIDE_WEIGHT > 0:
-    upside_map = compute_upside_map(WEEK) or {}
-    w = config.SHOWDOWN_UPSIDE_WEIGHT
+if upside_weight > 0:
+    try:
+        upside_map = compute_upside_map(WEEK) or {}
+        _record_source('Upside/ceiling', bool(upside_map), f"{len(upside_map)} players")
+    except Exception as e:
+        _record_source('Upside/ceiling', False, str(e))
+        print('Error loading upside data:', e)
+        upside_map = {}
+    w = upside_weight
     for p in players:
-        ceiling = upside_map.get(normalize_player_name(p.name))
-        if ceiling:
-            p.proj = min((1 - w) * p.proj + w * ceiling, config.SHOWDOWN_MAX_SCORE)
-    for p in players:
-        if p.cost > config.SHOWDOWN_SNEAKY_MAX_COST or p.cost <= 0:
-            continue
         ceiling = upside_map.get(normalize_player_name(p.name))
         if not ceiling:
             continue
-        if ceiling < p.proj * config.SHOWDOWN_SNEAKY_MIN_UPSIDE:
-            continue
-        sneaky_upside_plays.append((
-            p.name, p.pos, int(p.cost), round(p.proj, 2), round(ceiling, 2),
-            round(ceiling / p.cost * 1000, 1),
-        ))
-    sneaky_upside_plays.sort(key=lambda x: -x[5])
-    print(f"Applied {len(upside_map)} single-game upside adjustments (weight {w})")
+        if SINGLE_GAME:
+            p.proj = min((1 - w) * p.proj + w * ceiling, config.SHOWDOWN_MAX_SCORE)
+        else:
+            base = p.kv_store.get('base_proj') or p.proj
+            cap = min(config.MAX_SCORE, base * config.MAX_PROJ_MULTIPLIER)
+            if ceiling > p.proj:
+                p.proj = min((1 - w) * p.proj + w * ceiling, max(cap, p.proj))
+    if SINGLE_GAME:
+        for p in players:
+            if p.cost > config.SHOWDOWN_SNEAKY_MAX_COST or p.cost <= 0:
+                continue
+            ceiling = upside_map.get(normalize_player_name(p.name))
+            if not ceiling:
+                continue
+            if ceiling < p.proj * config.SHOWDOWN_SNEAKY_MIN_UPSIDE:
+                continue
+            sneaky_upside_plays.append((
+                p.name, p.pos, int(p.cost), round(p.proj, 2), round(ceiling, 2),
+                round(ceiling / p.cost * 1000, 1),
+            ))
+        sneaky_upside_plays.sort(key=lambda x: -x[5])
+    print(f"Applied {len(upside_map)} upside adjustments (weight {w})")
 
 # Single-game slates: create 1.5x-salary/1.5x-projection MVP variants
 if SINGLE_GAME:
@@ -623,9 +700,10 @@ if SINGLE_GAME:
         mvp_players.append(mvp)
     players.extend(mvp_players)
 
-# Validate all player teams exist in spread data
+# Validate all player teams exist in spread data. If the whole spread source
+# failed we degrade to neutral totals instead of crashing (already logged).
 missing_teams = {p.team for p in players} - set(favor_map.keys())
-if missing_teams:
+if missing_teams and favor_map:
     error_msg = "The following teams are missing from spread/matchup data:\n"
     for team in sorted(missing_teams):
         error_msg += f"  {team} ({sum(1 for p in players if p.team == team)} players affected)\n"
@@ -634,6 +712,7 @@ if missing_teams:
 # Sort players into display lists
 defenses = []
 qbs = []
+skills = []
 mvps = []
 
 for p in players:
@@ -644,11 +723,16 @@ for p in players:
         mvps.append((p.name, p.proj, p.cost, p.proj / p.cost, p.pos, base_fppg, opponent))
     elif p.pos == 'D':
         defenses.append((p.team, p.proj, p.cost, p.proj / p.cost, base_fppg, favor_map.get(p.team, 0), opponent))
+    elif p.pos in ('RB', 'WR', 'TE') and p.proj > 0:
+        team_total = team_totals.get(p.team, avg_team_total)
+        total_deviation = team_total - avg_team_total
+        weather = float(p.kv_store.get('weather_factor', 1.0))
+        skills.append((p.name, p.pos, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, weather))
     elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY and p.proj > 0:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
         weather = float(p.kv_store.get('weather_factor', 1.0))
-        qbs.append((p.name, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, p.team, weather))
+        qbs.append((p.name, p.pos, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, weather))
 
 starter_map = build_starter_map(players, questionable_df)
 filtered_mvps = filter_mvps(mvps, players, starter_map)
@@ -657,31 +741,41 @@ filtered_mvps = filter_mvps(mvps, players, starter_map)
 # Display: sorted defenses / QBs / MVPs
 # ============================================================
 
-print("\n" + "=" * 100)
-print("SORTED DEFENSES")
-print("=" * 100)
-print(f"{'Team':<8} {'Proj':>8} {'Salary':>10} {'Base':>8} {'Spread':>8} {'Opp':>5} {'Value':>8}")
-print("-" * 100)
-for team, proj, cost, value, base_fppg, spread, opp in sorted(defenses, key=lambda x: x[3], reverse=True):
-    print(f"{team:<8} {proj:>8.2f} ${cost:>9,.0f} {base_fppg:>8.2f} {spread:>8.2f} {opp:>5} {(value * 1000):>7.1f}x")
+PROJ_TABLE_HEADER = (f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} "
+                     f"{'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Weather':>8}")
+
+
+def _proj_row(name, proj, cost, value, team_total, total_deviation, base_fppg, opp, weather):
+    arrow = '↓' if weather < 0.85 else ''
+    return (f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x "
+            f"{team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f} {weather:>7.3f}{arrow}")
+
+
+def print_sorted_proj_table(title, rows, width=108):
+    """Print a QB/skill-position table (shared header and row format)."""
+    print_table(title, PROJ_TABLE_HEADER, [_proj_row(r[0], *r[2:]) for r in rows], width)
+
+
+print_table(
+    "SORTED DEFENSES",
+    f"{'Team':<8} {'Proj':>8} {'Salary':>10} {'Base':>8} {'Spread':>8} {'Opp':>5} {'Value':>8}",
+    [f"{team:<8} {proj:>8.2f} ${cost:>9,.0f} {base_fppg:>8.2f} {spread:>8.2f} {opp:>5} {(value * 1000):>7.1f}x"
+     for team, proj, cost, value, base_fppg, spread, opp in sorted(defenses, key=lambda x: x[3], reverse=True)[:config.TOP_N_DISPLAY]],
+    61,
+)
 
 if SINGLE_GAME:
-    print("\n" + "=" * 100)
-    print("SORTED MVPs (Top 10 - Backups Shown Only if Starter Injured)")
-    print("=" * 100)
-    print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Base':>8} {'Value':>8} {'Games':>7} {'Opp':>5} {'Status':<10}")
-    print("-" * 100)
-    for name, proj, cost, value, pos, base_fppg, games_played, opp, status in filtered_mvps[:10]:
-        print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {base_fppg:>8.2f} {(value * 1000):>7.1f}x {games_played:>7.0f} {opp:>5} {status:<10}")
+    print_table(
+        f"SORTED MVPs (Top {config.TOP_N_DISPLAY} - Backups Shown Only if Starter Injured)",
+        f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Base':>8} {'Value':>8} {'Games':>7} {'Opp':>5} {'Status':<10}",
+        [f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {base_fppg:>8.2f} {(value * 1000):>7.1f}x {games_played:>7.0f} {opp:>5} {status:<10}"
+         for name, proj, cost, value, pos, base_fppg, games_played, opp, status in filtered_mvps[:config.TOP_N_DISPLAY]],
+        98,
+    )
 
-print("\n" + "=" * 115)
-print("SORTED QBs")
-print("=" * 115)
-print(f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} {'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Weather':>8}")
-print("-" * 115)
-for name, proj, cost, value, team_total, total_deviation, base_fppg, opp, team, weather in sorted(qbs, key=lambda x: x[3], reverse=True):
-    arrow = '↓' if weather < 0.85 else ''
-    print(f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f} {weather:>7.3f}{arrow}")
+print_sorted_proj_table("SORTED QBs", sorted(qbs, key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
+for _pos in ('RB', 'WR', 'TE'):
+    print_sorted_proj_table(f"SORTED {_pos}s", sorted((s for s in skills if s[1] == _pos), key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
 
 display_weather_summary(weather_df)
 
@@ -843,7 +937,7 @@ def print_optimized_roster(roster):
     num_teams_in_roster = len(teams_in_roster)
     max_teams_possible = len(set_teams)
 
-    print("\n" + "=" * 120)
+    print("\n" + "=" * 112)
     print(f"OPTIMIZED LINEUP (total_score={get_score(roster):.2f}, teams={num_teams_in_roster}/{max_teams_possible})\n---")
 
     position_order = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'D': 4, 'MVP': 5, 'FLEX': 6}
@@ -860,7 +954,7 @@ def print_optimized_roster(roster):
 
         roster_data.append({
             'Slot': f"{p.pos:5}",
-            'Name': p.name[:25],
+            'Name': p.name[:24],
             'Team': p.team,
             'Opp': opponent,
             'Salary': f"${salary:,}",
@@ -875,24 +969,26 @@ def print_optimized_roster(roster):
     roster_data.sort(key=lambda x: x['pos_order'])
 
     print(f"{'Slot':<6} {'Name':<24} {'Team':<5} {'Opp':<5} {'Salary':<10} {'Weather':<8} {'Base Proj':<12} {'Weighted Proj':<15} {'Value':<10} {'Spread':<8}")
-    print("-" * 125)
+    print("-" * 112)
     for row in roster_data:
         print(f"{row['Slot']:<6} {row['Name']:<24} {row['Team']:<5} {row['Opp']:<5} {row['Salary']:<10} {row['Weather']:<8} {row['Base Proj']:<12} {row['Weighted Proj']:<15} {row['Value']:<10} {row['Spread']:<8}")
 
-    print("-" * 120)
+    print("-" * 112)
     print(f"{'TOTAL':<6} {'':<24} {'':<5} ${total_salary:,} {'':<12} {get_score(roster):<15.2f}")
     print("-" * 3)
 
 
 if sneaky_upside_plays:
-    print("\n" + "=" * 100)
-    print("SNEAKY UPSIDE PLAYS (cheap, ceiling >> cost - low-rostered boom candidates)")
-    print("=" * 100)
-    print(f"{'Player':<26} {'Pos':<4} {'Salary':>8} {'Proj':>7} {'Ceiling':>8} {'Ceil/$1k':>8}")
-    print("-" * 100)
-    for name, pos, cost, proj, ceiling, uptv in sneaky_upside_plays[:config.SHOWDOWN_SNEAKY_TOP]:
-        print(f"{name:<26} {pos:<4} ${cost:>7,} {proj:>7.2f} {ceiling:>8.2f} {uptv:>7.1f}x")
-    print("=" * 100)
+    print_table(
+        "SNEAKY UPSIDE PLAYS (cheap, ceiling >> cost - low-rostered boom candidates)",
+        f"{'Player':<26} {'Pos':<4} {'Salary':>8} {'Proj':>7} {'Ceiling':>8} {'Ceil/$1k':>8}",
+        [f"{name:<26} {pos:<4} ${cost:>7,} {proj:>7.2f} {ceiling:>8.2f} {uptv:>7.1f}x"
+         for name, pos, cost, proj, ceiling, uptv in sneaky_upside_plays[:config.SHOWDOWN_SNEAKY_TOP]],
+        66,
+    )
+    print("=" * 66)
+
+print_data_status()
 
 roster = optimize_lineup(players)
 if roster:
@@ -931,9 +1027,7 @@ if NUM_LINEUPS > 1 and roster:
     rosters = sorted(rosters, key=get_score, reverse=True)
     print(f"\nCompared {len(rosters)} diversified lineups; showing the top (set DEBUG=1 to list all)")
     if os.environ.get('DEBUG'):
-        print("\n" + "=" * 100)
-        print(f"TOP {len(rosters)} DIVERSIFIED LINEUPS (low-ceiling slots rotated out)")
-        print("=" * 100)
+        print_banner(f"TOP {len(rosters)} DIVERSIFIED LINEUPS (low-ceiling slots rotated out)", 100)
         for i, r in enumerate(rosters, 1):
             total = get_score(r)
             names = ' | '.join(
@@ -1004,13 +1098,11 @@ if roster and not SINGLE_GAME:
     opt_score = get_score(roster)
 
     print("\nROSTER DIVERSITY ANALYSIS")
-    print("-" * 8)
+    print("-" * 25)
     print(f"Overall Diversity Score: {diversity['overall_score']}/100")
     print(f"  - Team Diversity:      {diversity['team_diversity']}/40")
     print(f"  - Position Diversity:  {diversity['position_diversity']}/30")
     print(f"  - Stack Penalty:       {diversity['stack_penalty']}/30")
-    print(f"\nTeams Used: {diversity['num_teams']} - {diversity['team_breakdown']}")
-    print(f"Positions: {diversity['position_breakdown']}")
 
     if diversity['overall_score'] < 50 and opt_score >= 45:
         print("\nWARNING: HIGH CORRELATION RISK DETECTED")

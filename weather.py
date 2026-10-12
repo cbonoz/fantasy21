@@ -299,9 +299,9 @@ def display_weather_summary(weather_df):
         print("No weather data available to display")
         return
 
-    print("\n" + "=" * 120)
+    print("\n" + "=" * 112)
     print("WEATHER CONDITIONS BY TEAM AND POSITION IMPACT")
-    print("=" * 120)
+    print("=" * 112)
 
     weather_summary = {}
     for _, game in weather_df.iterrows():
@@ -317,8 +317,10 @@ def display_weather_summary(weather_df):
                 }
 
     print(f"{'Team':<8} {'Temp':<8} {'Wind':<8} {'Precip':<10} {'Condition':<12} {'Home/Away':<10} {'Impact on Positions':<50}")
-    print("-" * 120)
+    print("-" * 112)
 
+    detailed = []
+    na_groups = {}
     for team in sorted(weather_summary.keys()):
         info = weather_summary[team]
         temp = fmt_weather(info['temp'], '°F')
@@ -345,14 +347,26 @@ def display_weather_summary(weather_df):
                     parts.append(f"{label}↓")
             impact_str = " ".join(parts) if parts else "Neutral"
 
+        if temp == 'N/A' and wind == 'N/A' and precip == 'N/A':
+            na_groups.setdefault(impact_str, []).append(team)
+        else:
+            detailed.append((team, temp, wind, precip, condition, home_away, impact_str))
+
+    for team, temp, wind, precip, condition, home_away, impact_str in detailed:
         print(f"{team:<8} {temp:<8} {wind:<8} {precip:<10} {condition:<12} {home_away:<10} {impact_str:<50}")
 
-    print("=" * 120)
+    if na_groups:
+        print("-" * 112)
+        print("No forecast (N/A):")
+        for impact_str, teams in sorted(na_groups.items()):
+            print(f"  {impact_str:<22} {', '.join(teams)}")
+
+    print("=" * 112)
     print("\nPosition Impact Legend:")
     print("  Based on the exact projection factors: QB↓/WR↓ = passing penalized (rain/wind/cold),")
     print("  RB↑ = running boosted (rain/wind), K↓ = kicking penalized, D↑ = defense boosted.")
     print("  'Dome - weather-immune' = played in a covered stadium, no weather adjustment.")
-    print("=" * 120)
+    print("=" * 112)
 
 
 def fmt_weather(value, suffix):

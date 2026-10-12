@@ -32,6 +32,9 @@ ROSTER_SIZE_CLASSIC = 9
 ROSTER_SIZE_SINGLE = 6
 MAX_PLAYERS_PER_TEAM_CLASSIC = 9
 
+# Number of rows shown in the sorted defenses / QBs / MVPs printouts.
+TOP_N_DISPLAY = 10
+
 # ============================================================
 # Projection weights
 # ============================================================
@@ -42,6 +45,12 @@ INJURY_FACTOR = .12
 # Partial credit for Questionable players (they often play, but a banged-up
 # starter still creates teammate opportunity). Out/IR get 1.0; Doubtful is 0.
 INJURY_QUESTIONABLE_WEIGHT = 0.4
+# History/ceiling smoothing: recent games decay exponentially in history.
+HISTORY_RECENCY_DECAY = 0.8
+# GPP upside tilt: blend projections toward each player's ceiling so lineups
+# target boom scores (needed for winning/top-10% GPP finishes). SINGLE outside
+# single-game; set 0 for strict cash optimization.
+GPP_UPSIDE_WEIGHT = 0.35
 # Single-game only: blend projections toward each player's observed ceiling so
 # the optimizer targets boom scores (needed for winning/top-10% GPP finishes)
 # instead of point-expectation averages.
@@ -113,50 +122,20 @@ ROOFED_TEAMS = {'ARI', 'ATL', 'DAL', 'DET', 'HOU', 'IND', 'LAR', 'LV', 'MIN', 'N
 # Weekly tuning
 # ============================================================
 
-# Players to force into / out of the pool (weekly tuned)
+# Players to force into / out of the pool (weekly tuned). Single-game slates
+# include '(MVP)' variants for duplicated players.
 READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Davante Adams', 'James Cook III', 'DJ Moore', 'Jakobi Meyers', 'Cincinnati Bengals', 'Dalton Kincaid', 'Garrett Wilson',
-  'Amon-Ra St. Brown', 'Puka Nacua', 'Keon Coleman', 'Juwan Johnson', 'Bijan Robinson', 'Minnesota Vikings', 'Kalif Raymond',
-    'Deebo Samuel Sr.', 'Brock Bowers', 'Roman Wilson', 'Mike Gesicki', 'TreVeyon Henderson', 'Treylon Burks', 'Brian Robinson Jr.', 'Jonathan Taylor'
-  # 'Case Keenum','Tyler Shough', 'Deebo Samuel Sr.', 'Brock Bowers', 'Derrick Henry', 'James Cook III', 'Bryce Young', 'Brock Purdy', 'Mike Gesicki', "D'Andre Swift", 'Kalif Raymond',
-  # 'Christian McCaffrey', 'Cincinnati Bengals', 'Chris Olave', 'Chicago Bears', 'George Kittle',
-  # 'Minnesota Vikings', 'Juwan Johnson', 'Rashod Bateman', 'Jakobi Meyers',  'Kyren Williams', 'Las Vegas Raiders', 'Jahmyr Gibbs', 'Tyler Warren', 'Jaxon Smith-Njigba',  'Zay Flowers', 'CeeDee Lamb', 'C.J. Stroud', 'Baltimore Ravens', 'Jordan Watkins'
-  # 'Cincinnati Bengals', 'New England Patriots', 'Devaughn Vele', 'Case Keenum', 'CeeDee Lamb', 'Patrick Mahomes',
-  # 'Deebo Samuel Sr.', 'Christian McCaffrey', 'Chris Olave', 'Jahmyr Gibbs', 'Minnesota Vikings', "D'Andre Swift", "Kenneth Walker III", "Jaxon Smith-Njigba", "Derrick Henry", "Las Vegas Raiders"
-  # 'Seattle Seahawks', 'Jakobi Meyers', 'Jaylen Waddle', 'George Kittle', 'CeeDee Lamb',
-  # 'Mike Gesicki', 'Tre Tucker', 'Jaxon Smith-Njigba', 'Amon-Ra St. Brown',  'Devaughn Vele', 'Derrick Henry', 'Jahmyr Gibbs'
-  # 'Juwan Johnson', 'Mike Gesicki', 'Chris Olave', 'Patrick Mahomes', 'Jaxon Smith-Njigba', 'Amon-Ra St. Brown', 'Justin Jefferson', 'Tre Tucker', 'Devaughn Vele'
-  # 'Tre Tucker', 'Derrick Henry', 'Justin Jefferson', 'Jaxon Smith-Njigba', 'Amon-Ra St. Brown', 'Devaughn Vele', 'Garrett Wilson', 'Tetairoa McMillan', 'Chris Olave', "D'Andre Swift" , 'Chuba Hubbard', 'Jack Bech'
-                  # 'Jaxon Smith-Njigba'
-  # 'Kenneth Walker III', 'James Cook III', 'Jaxson Dart', 'Bryce Young', 'Antonio Williams', 'Braelon Allen', 'Amon-Ra St. Brown',
-  #   'Patrick Mahomes', 'Antonio Williams', 'Jared Goff'
-  # 'Kenneth Walker III', 'Antonio Williams', 'Jakobi Meyers', 'Jack Bech', 'James Cook III', 'Carolina Panthers', 'Emmett Johnson'
-  # 'Pittsburgh Steelers', 'Deebo Samuel Sr.', 'Dallas Goedert', 'Justin Jefferson', 'Mark Andrews',
-  # 'Parker Washington', 'Arizona Cardinals','
-  # 'Pittsburgh Steelers',  'Parker Washington', 'Las Vegas Raiders',
-  #   'Brenton Strange', 'David Montgomery', 'Dallas Goedert', 'Cincinnati Bengals', 'Justin Jefferson', 'Deebo Samuel Sr.', 'Trey McBride', 'Juwan Johnson', 'Seattle Seahawks', "D'Andre Swift"
-  #  'Seattle Seahawks', 'Tampa Bay Buccaneers', 'San Francisco 49ers', 'Justin Jefferson'
-#   'Jared Goff', 'Chris Olave', 'Seattle Seahawks', 'KC Concepcion', 'Dallas Goedert', 'Deebo Samuel Sr.', 'Demarcus Robinson', 'Mark Andrews', 'Denver Broncos', 'Tennessee Titans'
+  'Josh Allen', 'Cody White', 'Jameis Winston', 'Kirk Cousins', 'Tyler Shough',
 ]
-BANNED_SINGLE = ['Xavier Smith', 'New York Jets', 'James Cook III','Kirk Cousins (MVP)', 'Las Vegas Raiders (MVP)'
-  # 'Kenneth Walker III (MVP)'
-  # 'Los Angeles Rams', 'Ronnie Rivers', 'Devin Singletary', 'Terrance Ferguson'
-  # 'DJ Moore (MVP)', 'Jahmyr Gibbs (MVP)'
+BANNED_SINGLE = [
+  'Romeo Doubs', 'Ashton Jeanty', 'TreVeyon Henderson', 'New England Patriots', 'Cody White', 'Brock Bowers', 'Ashton Jeanty (MVP)', 'TreVeyon Henderson (MVP)', 'Brock Bowers (MVP)', 'Xavier Smith', 'Romeo Doubs (MVP)', 'New York Jets', 'Las Vegas Raiders', 'James Cook III','Kirk Cousins (MVP)', 'Las Vegas Raiders (MVP)',
 ]
 
 LOCKED = [
-  'Jared Goff',
-  'Washington Commanders',
-  'Michael Wilson',
-  # 'Drake Maye (MVP)',
-  # 'Michael Mayer'
-  # 'Braelon Allen',
-  # 'Jaxon Smith-Njigba',
-  # 'Aaron Jones Sr.',
-  # 'Emanuel Wilson'
+
 
   ]
 BLOCKED_TEAMS = []

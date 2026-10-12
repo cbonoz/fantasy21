@@ -146,8 +146,9 @@ def compute_giveaway_map(week, season=None):
 def compute_upside_map(week, season=None):
     """
     Per-player upside: the ~75th-percentile FanDuel-game from prior weeks
-    (falling back to the average). Used to tilt single-game projections toward
-    ceiling, since GPPs/top-10% are won by boom games, not averages.
+    (falling back to the average). Used to tilt projections toward ceiling in
+    GPP mode. Kept un-smoothed: ceilings of genuine boom threats are rare and
+    shrinking them toward a scrub-dominated league mean would kill the signal.
     Returns {normalized_name: ceiling_points}.
     """
     prior = prior_week_stats(week, season)
@@ -158,7 +159,7 @@ def compute_upside_map(week, season=None):
                 compute_fd_points(row._asdict(), row.position))
     upside = {}
     for name, vals in acc.items():
-        if len(vals) < 1:
+        if not vals:
             continue
         avg = sum(vals) / len(vals)
         pct = max(vals) if len(vals) < 3 else sorted(vals)[int(len(vals) * 0.75)]
@@ -170,8 +171,10 @@ def compute_history(week, season=None):
     """
     Prior-week averages of FanDuel points per player (normalized name key) and
     per defense team (lowercase abbr key), matching draft.py's lookup keys.
-    Defensive points are summed per game (not averaged per player row) so
-    multi-defender rotations don't dilute a team's defensive scoring.
+    Recent games are weighted more (exponential decay) so current form matters
+    more than early-season spikes. Defensive points are summed per game (not
+    averaged per player row) so multi-defender rotations don't dilute a team's
+    defensive scoring.
     """
     prior = prior_week_stats(week, season)
     player_fd = defaultdict(list)
@@ -179,15 +182,21 @@ def compute_history(week, season=None):
     for row in prior.itertuples(index=False):
         if row.position in OFFENSIVE_POSITIONS:
             player_fd[normalize_player_name(row.player_display_name)].append(
-                compute_fd_points(row._asdict(), row.position))
+                (int(row.week), compute_fd_points(row._asdict(), row.position)))
         elif row.position_group in DEFENSIVE_GROUPS:
             team = normalize_team_abbr(row.team).lower()
             team_fd[team][row.week] += compute_defense_fd_points(row._asdict())
 
-    history = {name: round(sum(v) / len(v), 3) for name, v in player_fd.items() if v}
+    def recency_weighted(values):
+        total = sum(v * config.HISTORY_RECENCY_DECAY ** (week - wk) for wk, v in values)
+        denom = sum(config.HISTORY_RECENCY_DECAY ** (week - wk) for wk, v in values)
+        return total / denom if denom else 0.0
+
+    history = {name: round(recency_weighted(v), 3) for name, v in player_fd.items() if v}
     for team, weeks in team_fd.items():
         if weeks:
-            history[team] = round(sum(weeks.values()) / len(weeks), 3)
+            history[team] = round(sum(v * config.HISTORY_RECENCY_DECAY ** (week - wk) for wk, v in weeks.items())
+                                  / sum(config.HISTORY_RECENCY_DECAY ** (week - wk) for wk in weeks), 3)
     return history
 
 
