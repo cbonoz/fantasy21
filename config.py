@@ -25,7 +25,7 @@ SALARY_MAX = 60000
 SALARY_MIN_OFFSET = 100
 SALARY_MIN_OFFSET_SINGLE = 300
 MIN_SALARY_CLASSIC = 5000
-MIN_SALARY_SINGLE = 2100
+MIN_SALARY_SINGLE = 2000
 MIN_QB_SALARY_CLASSIC = 6400
 MIN_QB_SALARY_SINGLE = 1000
 ROSTER_SIZE_CLASSIC = 9
@@ -45,6 +45,14 @@ INJURY_FACTOR = .12
 # Partial credit for Questionable players (they often play, but a banged-up
 # starter still creates teammate opportunity). Out/IR get 1.0; Doubtful is 0.
 INJURY_QUESTIONABLE_WEIGHT = 0.4
+# A CONFIRMED Out/IR starter funds a "next man up" pool worth this fraction of
+# their production for the team's remaining players at the SAME position (the
+# replacement inherits the vacated role). Capped per injured player so one
+# injury can't swing a projection unboundedly.
+INJURY_OUT_TRANSFER = 0.30
+INJURY_POOL_CAP = 2.0
+# Multiplier on a skill-position (RB/WR/TE) vacated-production pool.
+INJURY_SKILL_MULTIPLIER = 1.2
 # History/ceiling smoothing: recent games decay exponentially in history.
 HISTORY_RECENCY_DECAY = 0.8
 # GPP upside tilt: blend projections toward each player's ceiling so lineups
@@ -128,14 +136,18 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Josh Allen', 'Cody White', 'Jameis Winston', 'Kirk Cousins', 'Tyler Shough',
+  'Keon Coleman', 'Kalif Raymond', 'Tetairoa McMillan',
+  # 'Josh Allen', 'Kirk Cousins', 'Tyler Shough', 'Pittsburgh Steelers', 'Cleveland Browns',
+  #  'Darius Cooper', 'Rachaad White', 'Cody White', 'Jacoby Brissett','Case Keenum', 'Kansas City Chiefs', 'New England Patriots'
 ]
 BANNED_SINGLE = [
-  'Romeo Doubs', 'Ashton Jeanty', 'TreVeyon Henderson', 'New England Patriots', 'Cody White', 'Brock Bowers', 'Ashton Jeanty (MVP)', 'TreVeyon Henderson (MVP)', 'Brock Bowers (MVP)', 'Xavier Smith', 'Romeo Doubs (MVP)', 'New York Jets', 'Las Vegas Raiders', 'James Cook III','Kirk Cousins (MVP)', 'Las Vegas Raiders (MVP)',
+  'New England Patriots (MVP)', 'Efton Chism III',
 ]
 
 LOCKED = [
-
+  'Kirk Cousins',
+  # 'Tetairoa McMillan'
+# 'Drake Maye', 'Tampa Bay Buccaneers', 'Bo Nix'
 
   ]
 BLOCKED_TEAMS = []

@@ -283,6 +283,10 @@ else:
 
 INJURY_FACTOR = config.INJURY_FACTOR
 excluded_bonus = defaultdict(lambda: 0)
+# Vacated production routed to the SAME position group: when a starter is out,
+# the remaining players at that position inherit the role (unlike the old flat
+# team pool, which leaked an injured RB's workload to tight ends too).
+pos_bonus = defaultdict(lambda: 0)
 injured_qb = defaultdict(lambda: False)
 # When a team's WR is out, the remaining WRs inherit the targets: extra pool
 # that only WRs on the team receive (on top of the shared excluded_bonus).
@@ -299,14 +303,22 @@ for index, p in questionable_df.iterrows():
             continue
         points = p['FPPG']
         if points >= 7.5 and p['Played'] >= WEEK / 2:
-            weight = config.INJURY_QUESTIONABLE_WEIGHT if indicator == 'Q' else 1.0
-            injury_offset = min(points * INJURY_FACTOR, INJURY_FACTOR * 10)
+            # A confirmed Out/IR is a known, full-workload vacancy; a
+            # Questionable is speculative, so it transfers only partial credit.
+            confirmed = indicator in ('O', 'IR')
+            if confirmed:
+                weight = 1.0
+                injury_offset = min(points * config.INJURY_OUT_TRANSFER, config.INJURY_POOL_CAP)
+            else:
+                weight = config.INJURY_QUESTIONABLE_WEIGHT
+                injury_offset = min(points * INJURY_FACTOR, INJURY_FACTOR * 10)
             if pos == 'QB':
                 amt = -injury_offset * 2 * weight
-                if weight >= 1.0:
+                if confirmed:
                     injured_qb[p['Team']] = True
             elif pos in ('RB', 'WR', 'TE'):
-                amt = injury_offset * 1.2 * weight
+                amt = injury_offset * config.INJURY_SKILL_MULTIPLIER * weight
+                pos_bonus[(p['Team'], pos)] += amt
                 if pos == 'WR':
                     wr_bonus[p['Team']] += amt
             else:
@@ -454,8 +466,8 @@ def calculate_injury_bonuses(p, opponent):
         bonuses += -excluded_bonus.get(p.team, 0)
     elif p.pos in ['D', 'MVP']:
         bonuses += excluded_bonus.get(p.team, 0) / 2
-    elif p.pos != 'WR':
-        bonuses += excluded_bonus.get(p.team, 0)
+    elif p.pos in ('RB', 'TE'):
+        bonuses += pos_bonus.get((p.team, p.pos), 0)
     # WRs on a team with an injured WR inherit the vacated targets INSTEAD of
     # the shared pool (both would double-count the same vacated production),
     # split by each WR's share of the team's production.
