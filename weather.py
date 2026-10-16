@@ -332,8 +332,7 @@ def display_weather_summary(weather_df):
                      else "N/A")
 
         home_abbr = team_name_to_abbr.get(str(info['home_team']), str(info['home_team']))
-        if home_abbr in config.ROOFED_TEAMS:
-            continue
+        roofed = home_abbr in config.ROOFED_TEAMS
         parts = []
         for pos, label in (('QB', 'QB'), ('WR', 'WR'), ('TE', 'TE'), ('RB', 'RB'), ('D', 'D'), ('K', 'K')):
             factor = (calculate_wind_factor(info['wind'], pos)
@@ -345,7 +344,13 @@ def display_weather_summary(weather_df):
                 parts.append(f"{label}↓")
         if not parts:
             continue
-        rows.append((team, temp, wind, precip, condition, home_away, " ".join(parts)))
+        impact_str = " ".join(parts)
+        # Dome/roofed games are weather-immune (no projection adjustment), but
+        # surface them when the raw forecast is severe enough that an open roof
+        # could matter — flagged as informational only.
+        if roofed:
+            impact_str += "  (dome - informational)"
+        rows.append((team, temp, wind, precip, condition, home_away, impact_str))
 
     if not rows:
         print("  (no abnormal weather conditions affecting this slate)")
@@ -357,7 +362,8 @@ def display_weather_summary(weather_df):
     print("\nPosition Impact Legend (only teams with weather that shifts projections are shown):")
     print("  Based on the exact projection factors: QB↓/WR↓ = passing penalized (rain/wind/cold),")
     print("  RB↑ = running boosted (rain/wind), K↓ = kicking penalized, D↑ = defense boosted.")
-    print("  Dome/roofed games and neutral weather are omitted.")
+    print("  Neutral weather is omitted; dome/roofed games appear only when the raw forecast")
+    print("  is severe (marked informational — no projection adjustment is applied).")
     print("=" * 112)
 
 
