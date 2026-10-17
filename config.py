@@ -136,16 +136,16 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-  'Keon Coleman', 'Kalif Raymond', 'Tetairoa McMillan',
+'Jalen Coker', 'Josh Allen', 'Tyler Huntley','Jayden Daniels', 'Jordan Watkins', 'Brock Purdy', 'Dalton Kincaid', 'Zay Flowers', 'Cody White',  'DJ Moore', 'Devaughn Vele'
   # 'Josh Allen', 'Kirk Cousins', 'Tyler Shough', 'Pittsburgh Steelers', 'Cleveland Browns',
   #  'Darius Cooper', 'Rachaad White', 'Cody White', 'Jacoby Brissett','Case Keenum', 'Kansas City Chiefs', 'New England Patriots'
 ]
 BANNED_SINGLE = [
-  'New England Patriots (MVP)', 'Efton Chism III',
+  'Garrett Wilson', 'Efton Chism III', 'Garrett Wilson (MVP)',
+    'New York Jets', 'Zay Flowers'
 ]
 
 LOCKED = [
-  'Kirk Cousins',
   # 'Tetairoa McMillan'
 # 'Drake Maye', 'Tampa Bay Buccaneers', 'Bo Nix'
 

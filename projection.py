@@ -3,70 +3,62 @@
 
 
 def calculate_wind_factor(wind_speed, pos):
-    """Wind adjustment factor by position (<1 penalty, >1 bonus, 1 neutral)."""
+    """Wind adjustment factor by position (<1 penalty, >1 bonus, 1 neutral).
+
+    Onset is 10 mph: below that, NFL passing/running is effectively unaffected,
+    so ordinary game-day wind no longer shifts projections.
+    """
     if not wind_speed or wind_speed != wind_speed or wind_speed < 2:
         return 1.0
 
     if pos == 'QB':
-        if wind_speed < 5:
+        if wind_speed < 10:
             return 1.0
-        elif wind_speed < 10:
-            return 0.97
         elif wind_speed < 15:
-            return 0.94
+            return 0.97
+        elif wind_speed < 20:
+            return 0.93
+        else:
+            return 0.87
+    elif pos == 'WR':
+        if wind_speed < 10:
+            return 1.0
+        elif wind_speed < 15:
+            return 0.95
         elif wind_speed < 20:
             return 0.90
         else:
-            return 0.85
-    elif pos == 'WR':
-        if wind_speed < 5:
-            return 1.0
-        elif wind_speed < 10:
-            return 0.96
-        elif wind_speed < 15:
-            return 0.92
-        elif wind_speed < 20:
-            return 0.87
-        else:
-            return 0.80
+            return 0.82
     elif pos == 'TE':
-        if wind_speed < 5:
+        if wind_speed < 10:
             return 1.0
-        elif wind_speed < 10:
+        elif wind_speed < 15:
             return 0.97
-        elif wind_speed < 15:
-            return 0.94
         elif wind_speed < 20:
-            return 0.89
+            return 0.92
         else:
-            return 0.83
+            return 0.85
     elif pos == 'RB':
-        if wind_speed < 5:
+        if wind_speed < 10:
             return 1.0
-        elif wind_speed < 10:
-            return 1.02
         elif wind_speed < 15:
-            return 1.04
+            return 1.03
         elif wind_speed < 20:
             return 1.05
         else:
             return 1.06
     elif pos == 'K':
-        if wind_speed < 5:
+        if wind_speed < 10:
             return 1.0
-        elif wind_speed < 10:
-            return 0.98
         elif wind_speed < 15:
-            return 0.95
+            return 0.97
         elif wind_speed < 20:
-            return 0.88
+            return 0.90
         else:
-            return 0.75
+            return 0.78
     elif pos in ('D', 'MVP'):
-        if wind_speed < 5:
+        if wind_speed < 10:
             return 1.0
-        elif wind_speed < 10:
-            return 1.01
         elif wind_speed < 15:
             return 1.02
         elif wind_speed < 20:

@@ -464,10 +464,14 @@ def calculate_injury_bonuses(p, opponent):
         bonuses += INJURED_QB_BONUS if p.pos in ['D', 'MVP'] else INJURED_QB_BONUS / 2
     if p.pos == 'QB':
         bonuses += -excluded_bonus.get(p.team, 0)
-    elif p.pos in ['D', 'MVP']:
+    elif p.pos == 'MVP':
+        # MVP is a boosted offensive player: own-team skill injuries still help.
         bonuses += excluded_bonus.get(p.team, 0) / 2
     elif p.pos in ('RB', 'TE'):
         bonuses += pos_bonus.get((p.team, p.pos), 0)
+    # Defenses get no own-team injury bonus (a team's own offensive injuries
+    # don't help its defense); the opponent's injuries are handled separately
+    # in calculate_adjusted_projection.
     # WRs on a team with an injured WR inherit the vacated targets INSTEAD of
     # the shared pool (both would double-count the same vacated production),
     # split by each WR's share of the team's production.
@@ -728,7 +732,7 @@ skills = []
 mvps = []
 
 for p in players:
-    base_fppg = float(p.kv_store.get('FPPG') or 0)
+    base_fppg = float(p.kv_store.get('base_proj') or p.kv_store.get('FPPG') or 0)
     opponent = get_opponent(p)
 
     if p.pos == 'MVP':
@@ -957,7 +961,7 @@ def print_optimized_roster(roster):
     roster_data = []
     total_salary = 0
     for p in roster.players:
-        base_fppg = _safe_float(p.kv_store.get('FPPG'))
+        base_fppg = _safe_float(p.kv_store.get('base_proj') or p.kv_store.get('FPPG'))
         salary = int(p.cost)
         opponent = get_opponent(p)
         spread = favor_map.get(p.team, 0)
