@@ -5,10 +5,21 @@
 # Paths
 # ============================================================
 
+import os
+import time
+
 DATA_FOLDER = './data26'
 ACTIVE_FOLDER = './active'
 UPLOAD_FOLDER = './upload'
 CACHE_FOLDER = './ranking'
+CACHE_MAX_AGE_DAYS = 4
+
+
+def cache_is_fresh(path):
+    """Return whether a cache exists and is younger than the configured TTL."""
+    if not os.path.isfile(path):
+        return False
+    return time.time() - os.path.getmtime(path) < CACHE_MAX_AGE_DAYS * 24 * 60 * 60
 
 # ============================================================
 # Season
@@ -43,8 +54,13 @@ WEIGHTED = True
 AVERAGE_WEIGHT = .5
 INJURY_FACTOR = .12
 # Partial credit for Questionable players (they often play, but a banged-up
-# starter still creates teammate opportunity). Out/IR get 1.0; Doubtful is 0.
-INJURY_QUESTIONABLE_WEIGHT = 0.4
+# starter still creates teammate opportunity). Out/IR get 1.0.
+INJURY_QUESTIONABLE_WEIGHT = 0.5
+# Doubtful players receive more replacement credit than Questionable players,
+# but less than a confirmed Out/IR player.
+INJURY_DOUBTFUL_WEIGHT = 0.7
+# Minimum recent production for an injured player to create teammate workload.
+MIN_INJURY_FPPG = 6.0
 # A CONFIRMED Out/IR starter funds a "next man up" pool worth this fraction of
 # their production for the team's remaining players at the SAME position (the
 # replacement inherits the vacated role). Capped per injured player so one
@@ -136,17 +152,18 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-'Jalen Coker', 'Josh Allen', 'Tyler Huntley','Jayden Daniels', 'Jordan Watkins', 'Brock Purdy', 'Dalton Kincaid', 'Zay Flowers', 'Cody White',  'DJ Moore', 'Devaughn Vele'
+    'Jordan Watkins', 'Cody White', 'Tre Tucker', 'Derrick Henry', 'Brian Robinson Jr.', 'CeeDee Lamb', 'Jalen Coker', 'Chuba Hubbard',
+      'Bijan Robinson', 'Drake London', 'Keon Coleman', 'Josh Allen', 'DeMario Douglas', 'Kirk Cousins', 'Brock Purdy',  'Germie Bernard', 'Bryce Young', 'Zay Flowers', 'DJ Moore'
+# 'Jalen Coker',  'Josh Allen', 'Tyler Huntley','Jayden Daniels', 'Jordan Watkins', 'Brock Purdy', 'Dalton Kincaid', 'Zay Flowers', 'Cody White',  'DJ Moore', 'Devaughn Vele'
   # 'Josh Allen', 'Kirk Cousins', 'Tyler Shough', 'Pittsburgh Steelers', 'Cleveland Browns',
   #  'Darius Cooper', 'Rachaad White', 'Cody White', 'Jacoby Brissett','Case Keenum', 'Kansas City Chiefs', 'New England Patriots'
 ]
 BANNED_SINGLE = [
-  'Garrett Wilson', 'Efton Chism III', 'Garrett Wilson (MVP)',
-    'New York Jets', 'Zay Flowers'
+  'Garrett Wilson', 'Efton Chism III', 'Garrett Wilson (MVP)', 'New York Jets', 'Zay Flowers'
 ]
 
 LOCKED = [
-  # 'Tetairoa McMillan'
+    'Carolina Panthers', 'Isaiah Likely', 'Rhamondre Stevenson', 'Braelon Allen'
 # 'Drake Maye', 'Tampa Bay Buccaneers', 'Bo Nix'
 
   ]

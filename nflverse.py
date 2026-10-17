@@ -29,9 +29,11 @@ def get_weekly_player_stats(week, season=None):
     """Weekly player stats for the season, cached per week."""
     season = season or _season()
     cache_file = _cache_path('nflverse', week)
-    if os.path.isfile(cache_file):
+    if config.cache_is_fresh(cache_file):
         print('return cached data', f"nflverse week {week}")
         return pd.read_csv(cache_file, low_memory=False)
+    if os.path.isfile(cache_file):
+        print('stale cache; refreshing', f"nflverse week {week}")
     url = f"{NFLVERSE_BASE}/stats_player/stats_player_week_{season}.csv"
     print('fetching data', url)
     df = pd.read_csv(url, low_memory=False)
@@ -43,9 +45,11 @@ def get_snap_counts(week, season=None):
     """Season snap counts, cached per week."""
     season = season or _season()
     cache_file = _cache_path('snap_counts', week)
-    if os.path.isfile(cache_file):
+    if config.cache_is_fresh(cache_file):
         print('return cached data', f"snap counts week {week}")
         return pd.read_csv(cache_file)
+    if os.path.isfile(cache_file):
+        print('stale cache; refreshing', f"snap counts week {week}")
     url = f"{NFLVERSE_BASE}/snap_counts/snap_counts_{season}.csv"
     print('fetching data', url)
     df = pd.read_csv(url)
@@ -71,10 +75,12 @@ def compute_fpa_map(week, season=None):
     Returns {defense_team: {position: avg_fd_points_allowed_per_game}}.
     """
     cache_file = f"{config.CACHE_FOLDER}/fpa_week_{week}.json"
-    if os.path.isfile(cache_file):
+    if config.cache_is_fresh(cache_file):
         print('return cached data', f"fpa week {week}")
         with open(cache_file) as f:
             return json.load(f)
+    if os.path.isfile(cache_file):
+        print('stale cache; refreshing', f"fpa week {week}")
 
     prior = prior_week_stats(week, season)
     game_totals = defaultdict(float)
@@ -108,10 +114,12 @@ def compute_giveaway_map(week, season=None):
     small, high-variance early-season sample doesn't overreact.
     """
     cache_file = f"{config.CACHE_FOLDER}/giveaway_week_{week}.json"
-    if os.path.isfile(cache_file):
+    if config.cache_is_fresh(cache_file):
         print('return cached data', f"giveaway week {week}")
         with open(cache_file) as f:
             return json.load(f)
+    if os.path.isfile(cache_file):
+        print('stale cache; refreshing', f"giveaway week {week}")
 
     prior = prior_week_stats(week, season)
     per_game = defaultdict(lambda: defaultdict(float))

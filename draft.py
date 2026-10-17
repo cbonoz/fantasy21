@@ -295,19 +295,21 @@ wr_bonus = defaultdict(lambda: 0)
 for index, p in questionable_df.iterrows():
     pos = p['Position']
     if pos in ['TE', 'WR', 'RB', 'QB']:
-        # Out (O) / Injured Reserve fund full bonuses; Questionable (Q) funds a
-        # partial credit (they often play, but banged-up or out triggers real
-        # opportunity for teammates). Doubtful (D) is too uncertain, skip.
+        # Out (O) / Injured Reserve (IR) fund full bonuses. Doubtful (D) and
+        # Questionable (Q) statuses receive progressively smaller transfers.
         indicator = str(p['Injury Indicator']).strip().upper()
-        if indicator not in ('O', 'IR', 'Q'):
+        if indicator not in ('O', 'IR', 'Q', 'D'):
             continue
         points = p['FPPG']
-        if points >= 7.5 and p['Played'] >= WEEK / 2:
+        if points >= config.MIN_INJURY_FPPG and p['Played'] >= WEEK / 2:
             # A confirmed Out/IR is a known, full-workload vacancy; a
             # Questionable is speculative, so it transfers only partial credit.
             confirmed = indicator in ('O', 'IR')
             if confirmed:
                 weight = 1.0
+                injury_offset = min(points * config.INJURY_OUT_TRANSFER, config.INJURY_POOL_CAP)
+            elif indicator == 'D':
+                weight = config.INJURY_DOUBTFUL_WEIGHT
                 injury_offset = min(points * config.INJURY_OUT_TRANSFER, config.INJURY_POOL_CAP)
             else:
                 weight = config.INJURY_QUESTIONABLE_WEIGHT
@@ -339,7 +341,7 @@ def get_nfl_positions():
         return positions
     return [
         ['QB', 1, 1],
-        ['RB', 2, 3],
+        ['RB', 3, 3],
         ['WR', 3, 4],
         ['TE', 1, 2],
         ['D', 1, 1],
@@ -660,6 +662,16 @@ for p in players:
 for p in players:
     p.proj = calculate_adjusted_projection(p)
     p.kv_store['adjusted_proj'] = p.proj
+
+if fp_proj_map:
+    fp_matched = sum(fp_projection_for(p) is not None for p in players)
+    _record_source(
+        'FantasyPros',
+        bool(fp_matched),
+        f"{len(fp_proj_map)} projections; matched {fp_matched}/{len(players)} active players",
+    )
+    if fp_matched < len(players):
+        print(f"WARNING: FantasyPros has no projection for {len(players) - fp_matched}/{len(players)} active slate players")
 
 # GPP upside tilt: blend projections toward each player's ceiling so lineups
 # target boom scores (single-game winners / top-10% GPP finishes) instead of

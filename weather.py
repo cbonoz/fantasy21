@@ -222,9 +222,11 @@ def get_nfl_weather(week=None, season=None):
 
     # Check cache first
     cache_file = f"./ranking/weather_week{week}.csv"
-    if os.path.isfile(cache_file):
+    if config.cache_is_fresh(cache_file):
         print(f"Returning cached weather data for week {week}")
         return pd.read_csv(cache_file)
+    if os.path.isfile(cache_file):
+        print(f"Cached weather data for week {week} is stale; refreshing")
 
     # Construct URL based on week
     if week <= 18:

@@ -1,5 +1,6 @@
 import pytest
 
+from nfl_teams import normalize_player_name
 import sleeper
 from sleeper import build_projection_map
 
@@ -8,6 +9,8 @@ def _projections():
     return [
         {'team': 'KC', 'player': {'first_name': 'Travis', 'last_name': 'Kelce', 'position': 'TE'},
          'stats': {'pts_std': 6.98}},
+        {'team': 'CHI', 'player': {'first_name': 'Luther', 'last_name': 'Burden', 'position': 'WR'},
+         'stats': {'pts_std': 7.41}},
         {'team': 'LV', 'player': {'position': 'DEF'}, 'stats': {'pts_std': 5.22}},
         {'team': 'SF', 'player': {'position': 'DEF'}, 'stats': {'pts_std': 9.51}},
     ]
@@ -27,3 +30,10 @@ class TestBuildProjectionMap:
         result = build_projection_map(3)
 
         assert result[('KC', 'TE', 'travis kelce')] == 6.98
+
+    def test_projection_matches_roster_name_with_suffix(self, monkeypatch):
+        monkeypatch.setattr(sleeper, 'get_projections', lambda week, season=None: _projections())
+        result = build_projection_map(3)
+
+        roster_key = normalize_player_name('Luther Burden III')
+        assert result[('CHI', 'WR', roster_key)] == 7.41

@@ -16,10 +16,12 @@ def get_projections(week, season=None):
     """Raw Sleeper projections for a week, cached per week."""
     season = season or int(config.SEASON_START.split('/')[-1])
     cache_file = f"{config.CACHE_FOLDER}/sleeper_week_{week}.json"
-    if os.path.isfile(cache_file):
+    if config.cache_is_fresh(cache_file):
         print('return cached data', f"sleeper week {week}")
         with open(cache_file) as f:
             return json.load(f)
+    if os.path.isfile(cache_file):
+        print('stale cache; refreshing', f"sleeper week {week}")
 
     url = (f"{SLEEPER_BASE}/projections/nfl/{season}/{week}"
            "?season_type=regular&position[]=QB&position[]=RB&position[]=WR"

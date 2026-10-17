@@ -243,11 +243,11 @@ def compute_fd_points(stats, position):
     if position == 'QB':
         return (f('passing_yards') * 0.04 + f('passing_tds') * 4
                 + f('rushing_yards') * 0.1 + f('rushing_tds') * 6
-                - f('passing_interceptions') - f('fumbles_lost_total'))
+                - f('passing_interceptions') - f('fumbles_lost_total') * 2)
     if position in ('RB', 'WR', 'TE'):
         return (f('rushing_yards') * 0.1 + f('rushing_tds') * 6
                 + f('receiving_yards') * 0.1 + f('receiving_tds') * 6
-                - f('fumbles_lost_total'))
+                - f('fumbles_lost_total') * 2)
     if position == 'K':
         return ((f('fg_made_0_19') + f('fg_made_20_29') + f('fg_made_30_39')) * 3
                 + f('fg_made_40_49') * 4
@@ -289,13 +289,13 @@ def compute_fp_projection(position, stats):
     if position == 'QB':
         return (f('pass_yds') * 0.04 + f('pass_tds') * 4
                 + f('rush_yds') * 0.1 + f('rush_tds') * 6
-                - f('pass_ints') - f('fl'))
+                - f('pass_ints') - f('fl') * 2)
     if position in ('RB', 'WR'):
         return (f('rush_yds') * 0.1 + f('rush_tds') * 6
                 + f('rec_yds') * 0.1 + f('rec_tds') * 6
-                - f('fl'))
+                - f('fl') * 2)
     if position == 'TE':
-        return f('rec_yds') * 0.1 + f('rec_tds') * 6 - f('fl')
+        return f('rec_yds') * 0.1 + f('rec_tds') * 6 - f('fl') * 2
     if position == 'K':
         return f('fg') * 3 + f('xpt')
     return 0.0

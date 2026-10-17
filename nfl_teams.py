@@ -46,5 +46,8 @@ def normalize_team_abbr(abbr):
 
 
 def normalize_player_name(name):
-    """Lowercase, strip periods, collapse whitespace: 'J.K. Dobbins' -> 'jk dobbins'."""
-    return ' '.join(str(name).lower().replace('.', '').split())
+    """Normalize names for cross-source matching, including generational suffixes."""
+    parts = str(name).lower().replace('.', '').split()
+    if parts and parts[-1] in {'jr', 'sr', 'ii', 'iii', 'iv', 'v'}:
+        parts.pop()
+    return ' '.join(parts)

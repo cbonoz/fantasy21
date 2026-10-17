@@ -132,6 +132,12 @@ class TestComputeFdPoints:
     def test_missing_fields_default_zero(self):
         assert compute_fd_points({}, 'QB') == 0.0
 
+    def test_lost_fumble_is_two_points_for_skill_players(self):
+        assert compute_fd_points({'fumbles_lost_total': 1}, 'WR') == -2.0
+
+    def test_lost_fumble_is_two_points_for_qbs(self):
+        assert compute_fd_points({'fumbles_lost_total': 1}, 'QB') == -2.0
+
 
 class TestComputeDefenseFdPoints:
     def test_big_play_scoring(self):
@@ -175,3 +181,7 @@ class TestComputeFpProjection:
 
     def test_missing_fields(self):
         assert compute_fp_projection('QB', {}) == 0.0
+
+    def test_lost_fumble_is_two_points(self):
+        assert compute_fp_projection('WR', {'fl': 1}) == -2.0
+        assert compute_fp_projection('TE', {'fl': 1}) == -2.0

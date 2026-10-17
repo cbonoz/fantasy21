@@ -3,11 +3,15 @@ import pandas as pd
 import numpy as np
 import os
 
+import config
+
 def get_metabet_spread(week, api_key='219f64094f67ed781035f5f7a08840fc'):
     file_name = f"./spread/week_{week}.csv"
-    if os.path.isfile(file_name):
+    if config.cache_is_fresh(file_name):
         print('return cached data', f"week {week}")
         return pd.read_csv(file_name)
+    if os.path.isfile(file_name):
+        print('stale cache; refreshing', f"week {week}")
     else:
         print('fetching data')
     url = f"https://metabet.static.api.areyouwatchingthis.com/api/odds.json?apiKey={api_key}&location=MA&leagueCode=FBP"

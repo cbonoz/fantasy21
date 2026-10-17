@@ -97,13 +97,15 @@ def get_projections(week):
     """
     cache_file = _cache_path(week)
 
+    stale_cache = None
     if os.path.isfile(cache_file):
         with open(cache_file) as f:
             cached = json.load(f)
-        if cached:
+        if cached and config.cache_is_fresh(cache_file):
             print('return cached data', 'fantasypros', os.path.basename(cache_file))
             return cached
-        print('empty cache', os.path.basename(cache_file))
+        stale_cache = cached or None
+        print('stale or empty cache', os.path.basename(cache_file))
 
     entries = []
     for position, slug in POSITIONS.items():
@@ -136,6 +138,9 @@ def get_projections(week):
                 return fallback
 
     if os.path.isfile(cache_file):
+        if stale_cache:
+            print(f"fantasypros refresh failed; returning stale cache {os.path.basename(cache_file)}")
+            return stale_cache
         os.remove(cache_file)
     print(f"fantasypros week {week} returned no players and no fallback available")
     return []
