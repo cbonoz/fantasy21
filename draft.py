@@ -2,6 +2,7 @@
 # Run headless with: uv run python draft.py
 
 import copy
+import itertools
 import os
 from collections import defaultdict
 from datetime import datetime
@@ -12,7 +13,7 @@ from draftfast.lineup_constraints import LineupConstraints
 from draftfast.optimize import run
 from draftfast.settings import OptimizerSettings, CustomRule
 from fantasypros import build_projection_map as build_fp_projection_map
-from nfl_teams import normalize_player_name, normalize_team_abbr
+from nfl_teams import NFL_TEAM_MAP, normalize_player_name, normalize_team_abbr
 import numpy as np
 import pandas as pd
 from odds import get_metabet_spread
@@ -23,8 +24,10 @@ from projection import (
     blend_projections,
     cap_projection,
     compute_team_totals,
+    compute_wr_injury_bonus,
+    qb_quality_multiplier,
 )
-from nflverse import compute_fpa_map, compute_giveaway_map, compute_history, compute_qb_snap_share_map, compute_upside_map
+from nflverse import compute_fpa_map, compute_giveaway_map, compute_history, compute_qb_snap_share_map, compute_score_distributions, compute_upside_map
 from sleeper import build_projection_map
 from weather import display_weather_summary, get_nfl_weather, team_name_to_abbr
 
@@ -187,14 +190,31 @@ team_totals, avg_team_total = compute_team_totals(spread_df)
 # ============================================================
 
 weather_df = get_nfl_weather(WEEK)
-if weather_df.empty:
-    _record_source('Weather', False, 'no data for this week')
-else:
-    _record_source('Weather', True, f"{len(weather_df)} games")
-
 if not weather_df.empty:
-    weather_df['away_team'] = weather_df['away_team'].apply(lambda t: team_name_to_abbr.get(t, t))
-    weather_df['home_team'] = weather_df['home_team'].apply(lambda t: team_name_to_abbr.get(t, t))
+    def weather_team_abbr(team):
+        name = str(team).strip()
+        return team_name_to_abbr.get(name, NFL_TEAM_MAP.get(name, normalize_team_abbr(name)))
+
+    weather_df = weather_df.copy()
+    weather_df['away_team'] = weather_df['away_team'].apply(weather_team_abbr)
+    weather_df['home_team'] = weather_df['home_team'].apply(weather_team_abbr)
+    valid_teams = set(NFL_TEAM_MAP.values())
+    invalid_weather = (~weather_df['away_team'].isin(valid_teams)
+                       | ~weather_df['home_team'].isin(valid_teams))
+    invalid_count = int(invalid_weather.sum())
+    if invalid_count:
+        invalid_matchups = weather_df.loc[invalid_weather, 'matchup'].astype(str).tolist()
+        print(f"WARNING: ignoring {invalid_count} weather rows with unknown teams: {invalid_matchups}")
+        weather_df = weather_df.loc[~invalid_weather].copy()
+    if weather_df.empty:
+        _record_source('Weather', False, 'no valid team matchups for this week')
+    else:
+        detail = f"{len(weather_df)} valid games"
+        if invalid_count:
+            detail += f"; ignored {invalid_count} invalid rows"
+        _record_source('Weather', invalid_count == 0, detail)
+else:
+    _record_source('Weather', False, 'no data for this week')
 
 # ============================================================
 # Filter player pool
@@ -292,6 +312,54 @@ injured_qb = defaultdict(lambda: False)
 # that only WRs on the team receive (on top of the shared excluded_bonus).
 wr_bonus = defaultdict(lambda: 0)
 
+# Identify each team's available QB and project their quality from the same
+# season/history/weekly sources used for player projections. Prefer prior snap
+# share to distinguish the starter from backups; fall back to games played.
+qb_candidates = pd.concat([
+    df[df['Position'] == 'QB'],
+    questionable_df[questionable_df['Position'] == 'QB'],
+], ignore_index=True)
+qb_quality_candidates = defaultdict(list)
+for _, qb in qb_candidates.iterrows():
+    indicator = str(qb.get('Injury Indicator') or '').strip().upper()
+    if indicator in ('O', 'IR', 'D'):
+        continue
+    team = normalize_team_abbr(qb['Team'])
+    name = normalize_player_name(qb['Name'])
+    fppg = float(qb['FPPG']) if pd.notna(qb['FPPG']) else 0.0
+    history = historic_averages.get(name)
+    base = (config.AVERAGE_WEIGHT * fppg + (1 - config.AVERAGE_WEIGHT) * history
+            if history else fppg)
+    sleeper_qb = sleeper_proj_map.get((team, 'QB', name))
+    fp_qb = fp_proj_map.get((team, 'QB', name))
+    if sleeper_qb is not None:
+        base = blend_projections(base, sleeper_qb, config.SLEEPER_WEIGHT)
+    if fp_qb is not None:
+        base = blend_projections(base, fp_qb, config.FANTASYPROS_WEIGHT)
+    snap_share = qb_snap_share_map.get((team, name))
+    played = float(qb['Played']) if pd.notna(qb['Played']) else 0.0
+    # Candidates with snap-share data outrank those without it; otherwise use
+    # games played, then FPPG, as a starter/quality fallback.
+    starter_key = (snap_share is not None, snap_share or 0.0, played, fppg)
+    qb_quality_candidates[team].append((starter_key, base))
+
+team_qb_projections = {
+    team: max(candidates, key=lambda item: item[0])[1]
+    for team, candidates in qb_quality_candidates.items()
+}
+positive_qb_projections = [p for p in team_qb_projections.values() if p > 0]
+league_qb_projection = (sum(positive_qb_projections) / len(positive_qb_projections)
+                        if positive_qb_projections else 0.0)
+qb_quality_factors = {
+    team: qb_quality_multiplier(
+        projection, league_qb_projection,
+        config.INJURY_QB_QUALITY_WEIGHT,
+        config.INJURY_QB_QUALITY_MIN,
+        config.INJURY_QB_QUALITY_MAX,
+    )
+    for team, projection in team_qb_projections.items()
+}
+
 for index, p in questionable_df.iterrows():
     pos = p['Position']
     if pos in ['TE', 'WR', 'RB', 'QB']:
@@ -341,7 +409,7 @@ def get_nfl_positions():
         return positions
     return [
         ['QB', 1, 1],
-        ['RB', 3, 3],
+        ['RB', 2, 3],
         ['WR', 3, 4],
         ['TE', 1, 2],
         ['D', 1, 1],
@@ -357,7 +425,6 @@ if SINGLE_GAME:
     ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET_SINGLE
 else:
     ACTIVE_RULE_SET.salary_min = ACTIVE_RULE_SET.salary_max - config.SALARY_MIN_OFFSET
-    ACTIVE_RULE_SET.max_players_per_team = config.MAX_PLAYERS_PER_TEAM_CLASSIC
 ACTIVE_RULE_SET.roster_size = config.ROSTER_SIZE_CLASSIC if not SINGLE_GAME else config.ROSTER_SIZE_SINGLE
 
 ALL_POSITIONS = [*ACTIVE_RULE_SET.defensive_positions, *ACTIVE_RULE_SET.offensive_positions]
@@ -469,8 +536,6 @@ def calculate_injury_bonuses(p, opponent):
     elif p.pos == 'MVP':
         # MVP is a boosted offensive player: own-team skill injuries still help.
         bonuses += excluded_bonus.get(p.team, 0) / 2
-    elif p.pos in ('RB', 'TE'):
-        bonuses += pos_bonus.get((p.team, p.pos), 0)
     # Defenses get no own-team injury bonus (a team's own offensive injuries
     # don't help its defense); the opponent's injuries are handled separately
     # in calculate_adjusted_projection.
@@ -478,8 +543,15 @@ def calculate_injury_bonuses(p, opponent):
     # the shared pool (both would double-count the same vacated production),
     # split by each WR's share of the team's production.
     if p.pos == 'WR':
-        pool = min(wr_bonus.get(p.team, 0), config.WR_INHERITANCE_CAP)
-        bonuses += pool * config.WR_INHERITANCE_WEIGHT * wr_base_shares.get(p.team, {}).get(p.name, 0)
+        bonuses += compute_wr_injury_bonus(
+            wr_bonus.get(p.team, 0),
+            wr_base_shares.get(p.team, {}).get(p.name, 0),
+            qb_quality_factors.get(p.team, 1.0),
+            config.WR_INHERITANCE_CAP,
+            config.WR_INHERITANCE_WEIGHT,
+        )
+    elif p.pos in ('RB', 'TE'):
+        bonuses += pos_bonus.get((p.team, p.pos), 0) * qb_quality_factors.get(p.team, 1.0)
     if p.pos == 'RB' and injured_qb.get(p.team, False):
         bonuses += INJURED_QB_BONUS
     return bonuses
@@ -667,7 +739,7 @@ if fp_proj_map:
     fp_matched = sum(fp_projection_for(p) is not None for p in players)
     _record_source(
         'FantasyPros',
-        bool(fp_matched),
+        fp_matched == len(players),
         f"{len(fp_proj_map)} projections; matched {fp_matched}/{len(players)} active players",
     )
     if fp_matched < len(players):
@@ -691,8 +763,14 @@ if upside_weight > 0:
         ceiling = upside_map.get(normalize_player_name(p.name))
         if not ceiling:
             continue
+        # Preserve each player's best available ceiling for tournament (WTA)
+        # lineup ranking, even when the current projection is already higher.
+        p.kv_store['ceiling'] = max(ceiling, p.proj)
         if SINGLE_GAME:
-            p.proj = min((1 - w) * p.proj + w * ceiling, config.SHOWDOWN_MAX_SCORE)
+            # A historical ceiling should only add upside; it must not drag a
+            # stronger current projection down, especially for small samples.
+            if ceiling > p.proj:
+                p.proj = min((1 - w) * p.proj + w * ceiling, config.SHOWDOWN_MAX_SCORE)
         else:
             base = p.kv_store.get('base_proj') or p.proj
             cap = min(config.MAX_SCORE, base * config.MAX_PROJ_MULTIPLIER)
@@ -714,6 +792,34 @@ if upside_weight > 0:
         sneaky_upside_plays.sort(key=lambda x: -x[5])
     print(f"Applied {len(upside_map)} upside adjustments (weight {w})")
 
+# Single-game WRs from the same team compete for the same target pool. Keep
+# the team's WR1 intact, but apply a soft penalty to additional WRs rather than
+# banning correlated QB/WR stacks outright. Salary is a more stable role proxy
+# than a small-sample projection; explicit overrides win when supplied.
+if SINGLE_GAME and config.SINGLE_GAME_SAME_TEAM_WR_PENALTY > 0:
+    wrs_by_team = defaultdict(list)
+    for p in players:
+        if p.pos == 'WR':
+            wrs_by_team[p.team].append(p)
+    for team, team_players in wrs_by_team.items():
+        override = config.SINGLE_GAME_WR1_OVERRIDES.get(team)
+        names = {p.name for p in team_players}
+        if override in names:
+            wr1_name = override
+        else:
+            wr1_name = max(team_players, key=lambda player: player.proj).name
+        others = sorted(
+            (p for p in team_players if p.name != wr1_name),
+            key=lambda player: player.proj,
+            reverse=True,
+        )
+        for rank, p in enumerate(others, start=1):
+            penalty = config.SINGLE_GAME_SAME_TEAM_WR_PENALTY * rank
+            p.proj = max(0.0, p.proj - penalty)
+            if 'ceiling' in p.kv_store:
+                p.kv_store['ceiling'] = max(0.0, p.kv_store['ceiling'] - penalty)
+            p.kv_store['same_team_wr_penalty'] = penalty
+
 # Single-game slates: create 1.5x-salary/1.5x-projection MVP variants
 if SINGLE_GAME:
     mvp_players = []
@@ -725,6 +831,8 @@ if SINGLE_GAME:
         mvp.name = p.name + ' (MVP)'
         mvp.kv_store['base_name'] = p.name
         mvp.kv_store['base_pos'] = p.pos
+        # The MVP slot pays 1.5x, so its tournament ceiling must scale too.
+        mvp.kv_store['ceiling'] = (p.kv_store.get('ceiling') or p.proj) * 1.5
         mvp_players.append(mvp)
     players.extend(mvp_players)
 
@@ -805,7 +913,15 @@ print_sorted_proj_table("SORTED QBs", sorted(qbs, key=lambda x: x[4], reverse=Tr
 for _pos in ('RB', 'WR', 'TE'):
     print_sorted_proj_table(f"SORTED {_pos}s", sorted((s for s in skills if s[1] == _pos), key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
 
-display_weather_summary(weather_df)
+if SINGLE_GAME:
+    # A showdown slate is one game; showing the rest of the week's forecast is
+    # noise, so restrict the table to games involving both slate teams.
+    slate_weather = weather_df[
+        weather_df['away_team'].isin(set_teams) & weather_df['home_team'].isin(set_teams)
+    ]
+    display_weather_summary(slate_weather)
+else:
+    display_weather_summary(weather_df)
 
 # ============================================================
 # Optimizer: draftfast weighted optimization
@@ -879,6 +995,26 @@ def build_optimizer_settings(players, block_function):
                 comparison=lambda sum, a, b: sum(a) <= 2,
             )
         )
+
+        # A defense scores when the opposing passing game fails, so starting it
+        # alongside that team's QB bets both sides of one outcome. draftfast
+        # ignores no_offense_against_defense for showdown, and a full
+        # no-opposing-offense rule is impossible here anyway: the 2-team minimum
+        # would force both sides onto every roster and ban every defense.
+        for d in (p for p in players if p.pos == 'D'):
+            opponent = get_opponent(d)
+            for q in players:
+                if q.team != opponent or base_position(q) != 'QB':
+                    continue
+                base = q.name.replace(' (MVP)', '')
+                custom_rules.append(
+                    CustomRule(
+                        group_a=lambda p, team=d.team: p.pos == 'D' and p.team == team,
+                        group_b=lambda p, base=base: p.name.replace(' (MVP)', '') == base,
+                        comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
+                    )
+                )
+
         return OptimizerSettings(custom_rules=custom_rules, min_teams=2)
 
     # Non-single: at most 1 player per (position, team)
@@ -919,35 +1055,380 @@ def build_optimizer_settings(players, block_function):
 
     # Never pair a defense with offensive players from the team it faces:
     # both bet on opposite outcomes of the same game.
-    team_to_opponent = {}
-    for p in players:
-        if p.matchup and '@' in p.matchup:
-            team_to_opponent[p.team] = get_opponent(p)
-    for def_team, opp_team in team_to_opponent.items():
-        custom_rules.append(
-            CustomRule(
-                group_a=lambda p, def_team=def_team: p.pos == 'D' and p.team == def_team,
-                group_b=lambda p, opp_team=opp_team: p.pos in ('QB', 'RB', 'WR', 'TE') and p.team == opp_team,
-                comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
-            )
-        )
-
-    return OptimizerSettings(custom_rules=custom_rules, min_teams=3)
-
-
-def optimize_lineup(players):
-    """Run draftfast's weighted optimizer and return the optimal roster."""
-    return run(
-        rule_set=ACTIVE_RULE_SET,
-        player_pool=players,
-        verbose=False,
-        optimizer_settings=build_optimizer_settings(players, block_function),
-        constraints=constraints,
+    #
+    # Use draftfast's built-in setting, which adds a pairwise constraint
+    # (D <= 1 - each opposing offensive player). A single CustomRule with
+    # `sum(a) + sum(b) <= 1` would instead cap the opponent's ENTIRE offense
+    # at one player, making same-team stacks (e.g. QB + WR) impossible to
+    # build and therefore impossible to lock.
+    return OptimizerSettings(
+        custom_rules=custom_rules,
+        min_teams=3,
+        no_offense_against_defense=True,
     )
+
+
+def optimize_lineup(players, score_by='proj', extra_locked=None, extra_banned=None):
+    """Run draftfast's weighted optimizer and return the optimal roster.
+
+    score_by='ceiling' temporarily optimizes on each player's tournament
+    ceiling instead of the blended projection. That is the direct WTA search.
+    """
+    locked = list(dict.fromkeys(list(config.LOCKED) + list(extra_locked or [])))
+    banned = [
+        name for name in dict.fromkeys(list(BANNED) + list(extra_banned or []))
+        if name not in locked
+    ]
+    active_constraints = LineupConstraints(locked=locked, banned=banned)
+
+    original_proj = {p.name: p.proj for p in players}
+    if score_by == 'ceiling':
+        for p in players:
+            p.proj = p.kv_store.get('ceiling') or p.proj
+
+    try:
+        roster = run(
+            rule_set=ACTIVE_RULE_SET,
+            player_pool=players,
+            verbose=False,
+            optimizer_settings=build_optimizer_settings(players, block_function),
+            constraints=active_constraints,
+        )
+    finally:
+        for p in players:
+            p.proj = original_proj[p.name]
+
+    # draftfast deep-copies the pool when constraints exist, so restore the
+    # returned roster's blended projections before scoring/displaying it.
+    if roster and score_by == 'ceiling':
+        for p in roster.players:
+            p.proj = original_proj.get(p.name, p.proj)
+    return roster
 
 
 def get_score(roster):
     return sum(p.proj for p in roster.players)
+
+
+def get_wta_score(roster):
+    """Tournament ceiling: sum each player's best available ceiling.
+
+    Reported alongside total_score as an upside diagnostic. It is deliberately
+    NOT the selection objective: the ceiling is already blended into each
+    player's weighted proj at SHOWDOWN_UPSIDE_WEIGHT, and ranking on raw ceiling
+    would override that weight (effectively pinning it to 1.0).
+    """
+    return sum(p.kv_store.get('ceiling') or p.proj for p in roster.players)
+
+
+def _roster_key(roster):
+    return tuple(sorted(p.name for p in roster.players))
+
+
+class _EnumeratedRoster:
+    """Minimal roster wrapper for lineups built by the exact single-game search."""
+    __slots__ = ('players',)
+
+    def __init__(self, players):
+        self.players = players
+
+
+def enumerate_single_game_lineups(players, limit=None):
+    """Exhaustively enumerate legal single-game rosters, ranked by weighted proj.
+
+    The showdown pool is small (two teams), so an exact search is practical and
+    guarantees we do not miss a higher-scoring construction that the local
+    optimizer/diversification loop would skip.
+
+    Ranking uses each player's blended projection, which already includes that
+    player's ceiling at config.SHOWDOWN_UPSIDE_WEIGHT. So the selected roster is
+    the roster with the highest displayed total_score, and the ceiling is a
+    reported diagnostic rather than a second competing objective.
+    """
+    def base_name(name):
+        return name.replace(' (MVP)', '')
+
+    locked = list(dict.fromkeys(config.LOCKED))
+    banned = set(BANNED) - set(locked)
+    locked_bases = {base_name(name) for name in locked}
+
+    regular_pool = [
+        p for p in players
+        if p.pos != 'MVP'
+        and p.name not in banned
+        and base_name(p.name) not in locked_bases
+        and not block_function(p)
+    ]
+    mvp_pool = [
+        p for p in players
+        if p.pos == 'MVP'
+        and p.name not in banned
+        and base_name(p.name) not in locked_bases
+        and not block_function(p)
+    ]
+
+    locked_regulars = []
+    locked_mvps = []
+    for name in locked:
+        if name.endswith(' (MVP)'):
+            p = next((x for x in players if x.name == name), None)
+            if p is None or p.name in banned or block_function(p):
+                return []
+            locked_mvps.append(p)
+        else:
+            p = next((x for x in players if x.name == name and x.pos != 'MVP'), None)
+            if p is None or p.name in banned or block_function(p):
+                return []
+            locked_regulars.append(p)
+
+    if len(locked_mvps) > 1 or len(locked_regulars) > 5:
+        return []
+    locked_regular_bases = {base_name(p.name) for p in locked_regulars}
+    if any(base_name(p.name) in locked_regular_bases for p in locked_mvps):
+        return []
+
+    need = 5 - len(locked_regulars)
+    if need < 0:
+        return []
+    if locked_mvps:
+        mvp_pool = locked_mvps
+    if not mvp_pool:
+        return []
+
+    salary_min = ACTIVE_RULE_SET.salary_min
+    salary_max = ACTIVE_RULE_SET.salary_max
+    pos_max = {
+        pos: max_count
+        for pos, _, max_count in ACTIVE_RULE_SET.position_limits
+        if pos != 'MVP'
+    }
+    max_team_players = ACTIVE_RULE_SET.max_players_per_team or 99
+    min_mvp_cost = min(p.cost for p in mvp_pool)
+    max_mvp_cost = max(p.cost for p in mvp_pool)
+
+    results = []
+    for combo in itertools.combinations(regular_pool, need):
+        parts = list(combo) + locked_regulars
+        salary5 = sum(p.cost for p in parts)
+        if salary5 + min_mvp_cost > salary_max:
+            continue
+        if salary5 + max_mvp_cost < salary_min:
+            continue
+
+        position_counts = defaultdict(int)
+        team_counts = defaultdict(int)
+        for p in parts:
+            position_counts[p.pos] += 1
+            team_counts[p.team] += 1
+        if any(position_counts[pos] > cap for pos, cap in pos_max.items()):
+            continue
+        if any(count > max_team_players for count in team_counts.values()):
+            continue
+        qb_count = position_counts.get('QB', 0)
+        if qb_count > 2:
+            continue
+        bases = {base_name(p.name) for p in parts}
+
+        for m in mvp_pool:
+            if base_name(m.name) in bases:
+                continue
+            salary = salary5 + m.cost
+            if salary < salary_min or salary > salary_max:
+                continue
+            if team_counts.get(m.team, 0) + 1 > max_team_players:
+                continue
+            if len(team_counts) + (0 if m.team in team_counts else 1) < 2:
+                continue
+            mvp_is_qb = m.kv_store.get('base_pos') == 'QB'
+            if qb_count + (1 if mvp_is_qb else 0) > 2:
+                continue
+
+            roster_players = parts + [m]
+            # A defense scores when the opposing passing game fails, so starting
+            # it alongside that team's QB bets both sides of one outcome. A full
+            # "no opposing offense" rule is impossible in a two-team showdown --
+            # the 2-team minimum forces both sides onto every roster, which would
+            # ban every defense -- so only the QB pairing is excluded.
+            if any(
+                (q.kv_store.get('base_pos') or q.pos) == 'QB'
+                and q.team == get_opponent(d)
+                for d in roster_players if d.pos == 'D'
+                for q in roster_players
+            ):
+                continue
+            wta = sum(p.kv_store.get('ceiling') or p.proj for p in roster_players)
+            proj = sum(p.proj for p in roster_players)
+            results.append((wta, proj, salary, roster_players))
+
+    # Weighted proj is the objective: the ceiling is already baked into it via
+    # SHOWDOWN_UPSIDE_WEIGHT, so ranking on raw ceiling would silently override
+    # that weight (effectively w=1.0). Ceiling only breaks exact ties.
+    results.sort(key=lambda x: (x[1], x[0]), reverse=True)
+    unique = []
+    seen = set()
+    for _, _, _, roster_players in results:
+        key = tuple(sorted(p.name for p in roster_players))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(_EnumeratedRoster(roster_players))
+        if limit and len(unique) >= limit:
+            break
+    return unique
+
+
+# Monte Carlo draws used to rank showdown portfolios. Implementation detail
+# rather than a strategy knob: 6k keeps the ordering stable and the run ~1s.
+WTA_SIMS = 6000
+
+
+def select_wta_portfolio(rosters, players, count):
+    """Pick `count` entries that maximize the chance at least one wins the slate.
+
+    For each legal roster we simulate its score distribution from prior game
+    logs, then greedily add the entry that covers the most still-uncovered
+    simulated weeks. "Winning" is being the best available score that week, so
+    the target is the per-simulation maximum across the pool rather than a fixed
+    score -- that keeps the selection criterion identical to the one being
+    optimized.
+
+    This targets the actual winner-take-all question -- "will one of my entries
+    top the slate?" -- instead of summing per-player 75th percentiles, which
+    assumes every player booms in the same week and ignores variance.
+
+    Falls back to weighted-proj order whenever the simulation is unavailable.
+    """
+    ordered = sorted(rosters, key=get_score, reverse=True)
+    if count <= 1 or len(rosters) <= count:
+        return ordered[:count]
+
+    try:
+        player_scores, defense_scores = compute_score_distributions(WEEK)
+    except Exception as e:
+        print(f'WTA portfolio simulation unavailable ({e}); using projection order')
+        return ordered[:count]
+    if not player_scores:
+        return ordered[:count]
+
+    rng = np.random.default_rng(0)
+    samples = {}
+
+    def sample_vector(p):
+        """Empirical score samples for one roster entry (cached per name)."""
+        if p.name in samples:
+            return samples[p.name]
+        values = None
+        if p.pos == 'MVP':
+            base = p.kv_store.get('base_name', p.name.replace(' (MVP)', ''))
+            raw = player_scores.get(normalize_player_name(base))
+            values = [v * 1.5 for v in raw] if raw else None
+        elif p.pos == 'D':
+            values = defense_scores.get(p.team.lower())
+        elif p.pos != 'K':
+            values = player_scores.get(normalize_player_name(p.name))
+        # No history (kickers) -> hold at projection: no simulated variance.
+        vec = (rng.choice(np.asarray(values, dtype=float), size=WTA_SIMS)
+               if values else np.full(WTA_SIMS, p.proj))
+        samples[p.name] = vec
+        return vec
+
+    scores = np.zeros((len(rosters), WTA_SIMS), dtype=np.float32)
+    for i, roster in enumerate(rosters):
+        for p in roster.players:
+            scores[i] += sample_vector(p)
+
+    wins = scores >= scores.max(axis=0)
+
+    # Seed with the highest weighted proj: that is the entry the header
+    # justifies, and forcing it costs no portfolio value (validated cross-model).
+    seed = int(np.argmax([get_score(r) for r in rosters]))
+    picked = [seed]
+    covered = wins[seed].copy()
+    while len(picked) < min(count, len(rosters)):
+        gains = (covered | wins).mean(axis=1)
+        gains[picked] = -1.0
+        best = int(np.argmax(gains))
+        if gains[best] <= 0:
+            break
+        picked.append(best)
+        covered |= wins[best]
+
+    chosen = [rosters[i] for i in picked]
+    # Lead with the highest weighted proj so the headline entry keeps a
+    # total_score justification; the portfolio as a set is what optimizes WTA.
+    chosen.sort(key=get_score, reverse=True)
+    return chosen
+
+
+def generate_lineups(players, target_count):
+    """Explore blended, pure-ceiling, sneaky-play, and diversified builds.
+
+    Every candidate is ranked by its weighted projection (total_score), which
+    already includes each player's ceiling through SHOWDOWN_UPSIDE_WEIGHT. That
+    keeps the selection objective identical to the number printed in the lineup
+    header, so the top lineup can be justified from the displayed total.
+    """
+    # The two-team showdown pool is small enough for an exact search. That
+    # guarantees we see every legal construction, including sneaky-play builds
+    # that a local rotation would otherwise miss, before the WTA portfolio
+    # selector chooses which entries to actually play.
+    regular_count = sum(1 for p in players if p.pos != 'MVP')
+    mvp_count = sum(1 for p in players if p.pos == 'MVP')
+    if regular_count <= 30 and mvp_count <= 30:
+        enumerated = enumerate_single_game_lineups(players, limit=None)
+        if enumerated:
+            return select_wta_portfolio(enumerated, players, target_count)
+
+    candidates = []
+    seen = set()
+
+    def add(roster):
+        if not roster:
+            return
+        key = _roster_key(roster)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(roster)
+
+    # 1. The normal blended-projection optimum.
+    add(optimize_lineup(players))
+
+    # 2. A direct ceiling optimum: this is the purest WTA search.
+    add(optimize_lineup(players, score_by='ceiling'))
+
+    locked_bases = {name.replace(' (MVP)', '') for name in config.LOCKED}
+    banned_bases = {name.replace(' (MVP)', '') for name in BANNED}
+
+    # 3. Force each of the best cheap, high-ceiling plays into its own build.
+    for name, *_ in sneaky_upside_plays[:config.SHOWDOWN_SNEAKY_LINEUP_SEEDS]:
+        base = name.replace(' (MVP)', '')
+        if base in locked_bases or base in banned_bases:
+            continue
+        add(optimize_lineup(players, score_by='ceiling', extra_locked=[name]))
+
+    if not candidates:
+        return []
+
+    # 4. Diversify from the current best by rotating out its lowest-ceiling
+    #    non-locked player. One at a time keeps a six-player showdown feasible.
+    extra_banned = []
+    while len(candidates) < target_count:
+        base_roster = max(candidates, key=get_score)
+        removable = [
+            p.name for p in sorted(
+                base_roster.players,
+                key=lambda x: x.kv_store.get('ceiling') or x.proj,
+            )
+            if p.name.replace(' (MVP)', '') not in locked_bases
+            and p.name.replace(' (MVP)', '') not in banned_bases
+            and p.name not in extra_banned
+        ][:1]
+        if not removable:
+            break
+        extra_banned.append(removable[0])
+        add(optimize_lineup(players, score_by='ceiling', extra_banned=extra_banned))
+
+    return sorted(candidates, key=get_score, reverse=True)
 
 
 def _safe_float(value, default=0.0):
@@ -965,13 +1446,19 @@ def print_optimized_roster(roster):
     num_teams_in_roster = len(teams_in_roster)
     max_teams_possible = len(set_teams)
 
-    print("\n" + "=" * 112)
-    print(f"OPTIMIZED LINEUP (total_score={get_score(roster):.2f}, teams={num_teams_in_roster}/{max_teams_possible})\n---")
+    total_score = get_score(roster)
+    wta_ceiling = get_wta_score(roster)
+
+    print("\n" + "=" * 122)
+    print(f"OPTIMIZED LINEUP (total_score={total_score:.2f}, "
+          f"wta_ceiling={wta_ceiling:.2f} [+{wta_ceiling - total_score:.2f} upside], "
+          f"teams={num_teams_in_roster}/{max_teams_possible})\n---")
 
     position_order = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'D': 4, 'MVP': 5, 'FLEX': 6}
 
     roster_data = []
     total_salary = 0
+    no_ceiling = []
     for p in roster.players:
         base_fppg = _safe_float(p.kv_store.get('base_proj') or p.kv_store.get('FPPG'))
         salary = int(p.cost)
@@ -979,31 +1466,54 @@ def print_optimized_roster(roster):
         spread = favor_map.get(p.team, 0)
         total_salary += salary
         weather_factor = _safe_float(p.kv_store.get('weather_factor'), 1.0)
+        if p.kv_store.get('ceiling') is None:
+            no_ceiling.append(p.name)
+        ceiling = _safe_float(p.kv_store.get('ceiling'), p.proj)
 
         roster_data.append({
-            'Slot': f"{p.pos:5}",
-            'Name': p.name[:24],
-            'Team': p.team,
-            'Opp': opponent,
-            'Salary': f"${salary:,}",
-            'Weather': f"{weather_factor:.3f}",
-            'Base Proj': f"{base_fppg:6.2f}",
-            'Weighted Proj': f"{p.proj:6.2f}",
-            'Value': f"{(p.proj / salary) * 1000:6.1f}x",
-            'Spread': f"{spread:+.1f}",
+            'slot': p.pos,
+            'name': p.name[:24],
+            'team': p.team,
+            'opp': opponent,
+            'salary': f"${salary:,}",
+            'weather': f"{weather_factor:.3f}",
+            'base': f"{base_fppg:6.2f}",
+            'ceil': f"{ceiling:6.2f}",
+            'proj': f"{p.proj:6.2f}",
+            'value': f"{(p.proj / salary) * 1000:6.1f}x",
+            'spread': f"{spread:+.1f}",
             'pos_order': position_order.get(p.pos, 99),
         })
 
     roster_data.sort(key=lambda x: x['pos_order'])
 
-    print(f"{'Slot':<6} {'Name':<24} {'Team':<5} {'Opp':<5} {'Salary':<10} {'Weather':<8} {'Base Proj':<12} {'Weighted Proj':<15} {'Value':<10} {'Spread':<8}")
-    print("-" * 112)
-    for row in roster_data:
-        print(f"{row['Slot']:<6} {row['Name']:<24} {row['Team']:<5} {row['Opp']:<5} {row['Salary']:<10} {row['Weather']:<8} {row['Base Proj']:<12} {row['Weighted Proj']:<15} {row['Value']:<10} {row['Spread']:<8}")
+    columns = [
+        ('slot', 'Slot', 6), ('name', 'Name', 24), ('team', 'Team', 5),
+        ('opp', 'Opp', 5), ('salary', 'Salary', 10), ('weather', 'Weather', 8),
+        ('base', 'Base Proj', 12), ('ceil', 'Ceil', 9),
+        ('proj', 'Weighted Proj', 15), ('value', 'Value', 10), ('spread', 'Spread', 8),
+    ]
+    row_fmt = ' '.join(f"{{{key}:<{width}}}" for key, _, width in columns)
+    header = row_fmt.format(**{key: label for key, label, _ in columns})
+    rule = '-' * len(header)
 
-    print("-" * 112)
-    print(f"{'TOTAL':<6} {'':<24} {'':<5} ${total_salary:,} {'':<12} {get_score(roster):<15.2f}")
-    print("-" * 3)
+    print(header)
+    print(rule)
+    for row in roster_data:
+        print(row_fmt.format(**row))
+
+    print(rule)
+    print(f"{'TOTAL':<6} {f'${total_salary:,}':<24} "
+          f"weighted proj {total_score:.2f}   ceiling {wta_ceiling:.2f}")
+    print(rule)
+
+    # Make the objective auditable: every point in total_score comes from the
+    # per-player blend below, and the ceiling column shows the upside it draws on.
+    print(f"weighted proj = {1 - upside_weight:.2f} * adjusted + {upside_weight:.2f} * ceiling "
+          f"(upside applied only when ceiling > adjusted; upside weight = {upside_weight:.2f})")
+    if no_ceiling:
+        print(f"no ceiling history for: {', '.join(no_ceiling)} "
+              f"(weighted proj = adjusted projection, no upside credit)")
 
 
 if sneaky_upside_plays:
@@ -1018,51 +1528,69 @@ if sneaky_upside_plays:
 
 print_data_status()
 
-roster = optimize_lineup(players)
-if roster:
-    print_optimized_roster(roster)
-else:
-    print("No solution")
-
 # ============================================================
-# Multi-lineup mode: generate N diversified lineups (GPP exposure).
-# Set NUM_LINEUPS=<n> to enable; each player is capped so no single
-# player appears in too many of the entries.
+# Lineup generation: upside-weighted projection selection.
+# Set NUM_LINEUPS=<n> to generate alternatives; locks are preserved in all.
 # ============================================================
 
 NUM_LINEUPS = int(os.environ.get('NUM_LINEUPS') or (config.DEFAULT_SINGLE_LINEUPS if SINGLE_GAME else 0))
-if NUM_LINEUPS > 1 and roster:
-    # GPP entries: start from the optimal, then rotate out each lineup's three
-    # lowest-ceiling players so every entry is a distinct bet while the high
-    # upside core (and the MVP pick) is decided freely by the solver.
-    order = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'D': 4, 'MVP': 5, 'FLEX': 6}
-    banned_accum = list(BANNED)
-    rosters = [roster]
-    for _ in range(NUM_LINEUPS - 1):
-        prev = rosters[-1]
-        banned_accum += [p.name for p in sorted(prev.players, key=lambda x: x.proj)[:3]]
-        c = LineupConstraints(locked=[], banned=banned_accum)
-        r = run(
-            rule_set=ACTIVE_RULE_SET,
-            player_pool=players,
-            verbose=False,
-            optimizer_settings=build_optimizer_settings(players, block_function),
-            constraints=c,
-        )
-        if not r:
-            break
-        rosters.append(r)
-    rosters = sorted(rosters, key=get_score, reverse=True)
-    print(f"\nCompared {len(rosters)} diversified lineups; showing the top (set DEBUG=1 to list all)")
-    if os.environ.get('DEBUG'):
-        print_banner(f"TOP {len(rosters)} DIVERSIFIED LINEUPS (low-ceiling slots rotated out)", 100)
-        for i, r in enumerate(rosters, 1):
-            total = get_score(r)
-            names = ' | '.join(
-                f"{p.name.replace(' (MVP)', '')}({p.pos})" for p in sorted(r.players, key=lambda x: order.get(x.pos, 9))
-            )
-            print(f"{i:>2}. {total:>6.2f}  {names}")
-        print("=" * 100)
+
+if SINGLE_GAME:
+    # Exact search first: enumerate every legal showdown roster when the pool is
+    # small, then fall back to solver/ceiling/diversification builds.
+    rosters = generate_lineups(players, max(NUM_LINEUPS, 1))
+else:
+    roster = optimize_lineup(players)
+    if not roster:
+        rosters = []
+    elif NUM_LINEUPS > 1:
+        # Classic slates keep the projection-based rotation, and the resulting
+        # builds are ranked by the same weighted proj shown in the header.
+        locked_bases = {name.replace(' (MVP)', '') for name in config.LOCKED}
+        banned_bases = {name.replace(' (MVP)', '') for name in BANNED}
+        extra_banned = []
+        rosters = [roster]
+        for _ in range(NUM_LINEUPS - 1):
+            prev = rosters[-1]
+            removable = [
+                p.name for p in sorted(
+                    prev.players,
+                    key=lambda x: x.kv_store.get('ceiling') or x.proj,
+                )
+                if p.name.replace(' (MVP)', '') not in locked_bases
+                and p.name.replace(' (MVP)', '') not in banned_bases
+                and p.name not in extra_banned
+            ][:1]
+            if not removable:
+                break
+            extra_banned.append(removable[0])
+            r = optimize_lineup(players, extra_banned=extra_banned)
+            if not r:
+                break
+            rosters.append(r)
+        rosters = sorted(rosters, key=get_score, reverse=True)
+    else:
+        rosters = [roster]
+
+roster = None
+if not rosters:
+    print("No solution")
+else:
+    roster = rosters[0]
+    print_optimized_roster(roster)
+
+    if NUM_LINEUPS > 1:
+        order = {'QB': 0, 'RB': 1, 'WR': 2, 'TE': 3, 'D': 4, 'MVP': 5, 'FLEX': 6}
+        print(f"\nCompared {len(rosters)} diversified lineups; showing the top (set DEBUG=1 to list all)")
+        if os.environ.get('DEBUG'):
+            print_banner(f"TOP {len(rosters)} DIVERSIFIED LINEUPS (ranked by weighted proj)", 100)
+            for i, r in enumerate(rosters, 1):
+                names = ' | '.join(
+                    f"{p.name.replace(' (MVP)', '')}({p.pos})"
+                    for p in sorted(r.players, key=lambda x: order.get(x.pos, 9))
+                )
+                print(f"{i:>2}. proj {get_score(r):>6.2f} | WTA {get_wta_score(r):>6.2f}  {names}")
+            print("=" * 100)
 
 # ============================================================
 # Diversity analysis (classic slates only)

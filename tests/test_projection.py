@@ -11,6 +11,8 @@ from projection import (
     compute_fd_points,
     compute_fp_projection,
     compute_team_totals,
+    compute_wr_injury_bonus,
+    qb_quality_multiplier,
 )
 
 
@@ -159,6 +161,30 @@ class TestBlendProjections:
 
     def test_missing_primary_returns_secondary(self):
         assert blend_projections(None, 10.0) == 10.0
+
+
+class TestQbQualityMultiplier:
+    def test_average_qb_is_neutral(self):
+        assert qb_quality_multiplier(18.0, 18.0) == pytest.approx(1.0)
+
+    def test_above_average_qb_modestly_increases_injury_credit(self):
+        assert qb_quality_multiplier(22.0, 18.0) == pytest.approx(1.0 + 0.5 * (4 / 18))
+
+    def test_adjustment_is_bounded(self):
+        assert qb_quality_multiplier(40.0, 10.0) == pytest.approx(1.15)
+        assert qb_quality_multiplier(2.0, 20.0) == pytest.approx(0.85)
+
+    def test_missing_qb_quality_is_neutral(self):
+        assert qb_quality_multiplier(None, 18.0) == pytest.approx(1.0)
+
+
+class TestWrInjuryBonus:
+    def test_caps_typical_production_then_splits_and_scales_by_qb(self):
+        assert compute_wr_injury_bonus(2.4, 0.404, 1.098, 2.0, 1.0) == pytest.approx(0.887184)
+
+    def test_invalid_or_negative_inputs_do_not_create_bonus(self):
+        assert compute_wr_injury_bonus(-1, 0.5) == 0.0
+        assert compute_wr_injury_bonus(2, float('nan')) == 0.0
 
 
 class TestComputeFpProjection:

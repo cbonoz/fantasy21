@@ -2,6 +2,9 @@
 # Shared by draft.py and the test suite.
 
 
+import math
+
+
 def calculate_wind_factor(wind_speed, pos):
     """Wind adjustment factor by position (<1 penalty, >1 bonus, 1 neutral).
 
@@ -276,6 +279,37 @@ def blend_projections(primary, secondary, secondary_weight=0.3):
     if primary is None or primary <= 0:
         return secondary
     return (1 - secondary_weight) * primary + secondary_weight * secondary
+
+
+def qb_quality_multiplier(qb_projection, league_average,
+                          weight=0.5, min_multiplier=0.85, max_multiplier=1.15):
+    """Bound an injury-workload adjustment by QB projection vs. league average."""
+    try:
+        qb_projection = float(qb_projection)
+        league_average = float(league_average)
+    except (TypeError, ValueError):
+        return 1.0
+    if (not math.isfinite(qb_projection) or not math.isfinite(league_average)
+            or qb_projection <= 0 or league_average <= 0):
+        return 1.0
+    relative_deviation = (qb_projection - league_average) / league_average
+    return max(min_multiplier, min(max_multiplier, 1.0 + weight * relative_deviation))
+
+
+def compute_wr_injury_bonus(pool, production_share, qb_multiplier=1.0,
+                            pool_cap=2.0, inheritance_weight=1.0):
+    """Allocate a capped share of vacated WR production, adjusted for QB quality."""
+    try:
+        pool, production_share, qb_multiplier, pool_cap, inheritance_weight = map(
+            float, (pool, production_share, qb_multiplier, pool_cap, inheritance_weight))
+    except (TypeError, ValueError):
+        return 0.0
+    values = (pool, production_share, qb_multiplier, pool_cap, inheritance_weight)
+    if not all(math.isfinite(value) for value in values):
+        return 0.0
+    capped_pool = min(max(pool, 0.0), max(pool_cap, 0.0))
+    share = min(max(production_share, 0.0), 1.0)
+    return capped_pool * share * max(qb_multiplier, 0.0) * max(inheritance_weight, 0.0)
 
 
 def compute_fp_projection(position, stats):

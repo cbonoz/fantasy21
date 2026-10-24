@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 
 import nflverse
-from nflverse import compute_fpa_map
+from nflverse import compute_fpa_map, compute_upside_map
 
 
 def _df():
@@ -31,3 +31,19 @@ class TestComputeFpaMap:
         # Week 1: 3.0 pts allowed. Week 2: 100*0.1 + 1*6 = 16.0 pts allowed.
         # Per-game average = (3.0 + 16.0) / 2 = 9.5. Backup TEs must not dilute it.
         assert result['A']['TE'] == pytest.approx(9.5)
+
+
+class TestComputeUpsideMap:
+    def test_small_sample_does_not_collapse_to_max(self, monkeypatch):
+        # 100/200/400 rushing yards -> 10/20/40 FD points. The interpolated
+        # 75th percentile is 30, not the 40-point maximum.
+        df = pd.DataFrame([
+            {'week': 1, 'position': 'QB', 'player_display_name': 'Test QB', 'rushing_yards': 100},
+            {'week': 2, 'position': 'QB', 'player_display_name': 'Test QB', 'rushing_yards': 200},
+            {'week': 3, 'position': 'QB', 'player_display_name': 'Test QB', 'rushing_yards': 400},
+        ])
+        monkeypatch.setattr(nflverse, 'prior_week_stats', lambda week, season=None: df)
+
+        result = compute_upside_map(4)
+
+        assert result['test qb'] == pytest.approx(30.0)

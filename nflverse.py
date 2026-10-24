@@ -155,8 +155,10 @@ def compute_upside_map(week, season=None):
     """
     Per-player upside: the ~75th-percentile FanDuel-game from prior weeks
     (falling back to the average). Used to tilt projections toward ceiling in
-    GPP mode. Kept un-smoothed: ceilings of genuine boom threats are rare and
-    shrinking them toward a scrub-dominated league mean would kill the signal.
+    GPP mode. Uses an interpolated percentile so a three- or four-game sample
+    cannot collapse to its single maximum game. Kept un-smoothed: ceilings of
+    genuine boom threats are rare and shrinking them toward a scrub-dominated
+    league mean would kill the signal.
     Returns {normalized_name: ceiling_points}.
     """
     prior = prior_week_stats(week, season)
@@ -170,9 +172,35 @@ def compute_upside_map(week, season=None):
         if not vals:
             continue
         avg = sum(vals) / len(vals)
-        pct = max(vals) if len(vals) < 3 else sorted(vals)[int(len(vals) * 0.75)]
+        pct = float(pd.Series(vals).quantile(0.75))
         upside[name] = round(max(pct, avg), 3)
     return upside
+
+
+def compute_score_distributions(week, season=None):
+    """Per-game FanDuel score samples from prior weeks, for tail simulation.
+
+    Returns (player_scores, defense_scores):
+      player_scores  : {normalized_name: [fd_points, ...]} for offensive players
+      defense_scores : {team_abbr_lower: [fd_points, ...]} per team defense game
+
+    compute_upside_map collapses these to a single 75th percentile, which is
+    enough for a ceiling number but not for estimating a lineup's chance of
+    winning a tournament: that needs the shape of the distribution (variance,
+    fat tails), not one quantile.
+    """
+    prior = prior_week_stats(week, season)
+    player_scores = defaultdict(list)
+    defense_weeks = defaultdict(lambda: defaultdict(float))
+    for row in prior.itertuples(index=False):
+        if row.position in OFFENSIVE_POSITIONS:
+            player_scores[normalize_player_name(row.player_display_name)].append(
+                compute_fd_points(row._asdict(), row.position))
+        elif row.position_group in DEFENSIVE_GROUPS:
+            team = normalize_team_abbr(row.team).lower()
+            defense_weeks[team][int(row.week)] += compute_defense_fd_points(row._asdict())
+    defense_scores = {team: list(weeks.values()) for team, weeks in defense_weeks.items()}
+    return dict(player_scores), defense_scores
 
 
 def compute_history(week, season=None):
