@@ -5,13 +5,23 @@
 import math
 
 
+def _finite_float(value):
+    """Convert a value to a finite float, treating missing/invalid data as absent."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 def calculate_wind_factor(wind_speed, pos):
     """Wind adjustment factor by position (<1 penalty, >1 bonus, 1 neutral).
 
     Onset is 10 mph: below that, NFL passing/running is effectively unaffected,
     so ordinary game-day wind no longer shifts projections.
     """
-    if not wind_speed or wind_speed != wind_speed or wind_speed < 2:
+    wind_speed = _finite_float(wind_speed)
+    if wind_speed is None or wind_speed < 2:
         return 1.0
 
     if pos == 'QB':
@@ -74,7 +84,8 @@ def calculate_wind_factor(wind_speed, pos):
 
 def calculate_temperature_factor(temp, pos):
     """Temperature adjustment factor by position."""
-    if not temp or temp != temp or temp < -10 or temp > 130:
+    temp = _finite_float(temp)
+    if temp is None or temp < -10 or temp > 130:
         return 1.0
 
     if pos == 'QB':
@@ -143,58 +154,59 @@ def calculate_temperature_factor(temp, pos):
 def calculate_precipitation_factor(precip_chance, pos):
     """Precipitation adjustment factor by position.
 
-    Deliberately steep for passers: rain is a strong QB/WR fade, so even a
-    modest rain chance should drop a passer's projection enough that a
-    neutral-weather option wins. RBs gain a larger carry share.
+    Chance of precipitation alone does not indicate how much rain falls, so
+    use small, gradual adjustments rather than treating a moderate chance as
+    sustained heavy rain. RB/DST effects are similarly modest.
     """
-    if not precip_chance or precip_chance != precip_chance or precip_chance < 5:
+    precip_chance = _finite_float(precip_chance)
+    if precip_chance is None or precip_chance < 5:
         return 1.0
 
     if pos == 'QB':
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.80
+            return 0.99
         elif precip_chance < 75:
-            return 0.70
+            return 0.96
         else:
-            return 0.60
+            return 0.92
     elif pos in ['WR', 'TE']:
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.78
+            return 0.98
         elif precip_chance < 75:
-            return 0.68
+            return 0.94
         else:
-            return 0.55
+            return 0.89
     elif pos == 'RB':
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 1.03
+            return 1.01
         elif precip_chance < 75:
-            return 1.05
+            return 1.03
         else:
-            return 1.07
+            return 1.04
     elif pos == 'K':
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.82
+            return 0.99
         elif precip_chance < 75:
-            return 0.72
+            return 0.95
         else:
-            return 0.62
+            return 0.90
     elif pos in ('D', 'MVP'):
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 1.05
+            return 1.01
         elif precip_chance < 75:
-            return 1.09
+            return 1.03
         else:
-            return 1.12
+            return 1.05
 
     return 1.0
 
@@ -238,18 +250,20 @@ def cap_projection(adjusted_proj, base_score, pos, max_score=27.0,
 def compute_fd_points(stats, position):
     """Convert an nflverse weekly stat dict to FanDuel fantasy points."""
     def f(key):
-        try:
-            return float(stats.get(key) or 0)
-        except (TypeError, ValueError):
-            return 0.0
+        return _finite_float(stats.get(key)) or 0.0
 
     if position == 'QB':
         return (f('passing_yards') * 0.04 + f('passing_tds') * 4
                 + f('rushing_yards') * 0.1 + f('rushing_tds') * 6
+                + f('passing_2pt_conversions') * 2
+                + f('rushing_2pt_conversions') * 2
+                + f('special_teams_tds') * 6
                 - f('passing_interceptions') - f('fumbles_lost_total') * 2)
     if position in ('RB', 'WR', 'TE'):
         return (f('rushing_yards') * 0.1 + f('rushing_tds') * 6
                 + f('receiving_yards') * 0.1 + f('receiving_tds') * 6
+                + (f('rushing_2pt_conversions') + f('receiving_2pt_conversions')) * 2
+                + f('special_teams_tds') * 6
                 - f('fumbles_lost_total') * 2)
     if position == 'K':
         return ((f('fg_made_0_19') + f('fg_made_20_29') + f('fg_made_30_39')) * 3
@@ -262,23 +276,68 @@ def compute_fd_points(stats, position):
 def compute_defense_fd_points(stats):
     """nflverse defensive stat dict -> FanDuel DST points (big-play component)."""
     def f(key):
-        try:
-            return float(stats.get(key) or 0)
-        except (TypeError, ValueError):
-            return 0.0
+        return _finite_float(stats.get(key)) or 0.0
 
     return (f('def_tds') * 6 + f('def_interceptions') * 2
-            + f('def_fumbles_forced') * 2 + f('def_sacks')
-            + f('def_safeties') * 2 + f('fumble_recovery_tds') * 6)
+            + f('fumble_recovery_opp') * 2 + f('def_sacks')
+            + f('def_safeties') * 2 + f('fumble_recovery_tds') * 6
+            + (f('def_punt_blocks') + f('def_fg_blocks') + f('def_pat_blocks')) * 2
+            + f('special_teams_tds') * 6)
 
 
 def blend_projections(primary, secondary, secondary_weight=0.3):
     """Weighted blend of two projections; missing inputs fall back gracefully."""
+    primary = _finite_float(primary)
+    secondary = _finite_float(secondary)
     if secondary is None or secondary <= 0:
         return primary
     if primary is None or primary <= 0:
         return secondary
-    return (1 - secondary_weight) * primary + secondary_weight * secondary
+    weight = _finite_float(secondary_weight)
+    if weight is None:
+        weight = 0.3
+    weight = min(max(weight, 0.0), 1.0)
+    return (1 - weight) * primary + weight * secondary
+
+
+def blend_available_projections(projections, weights):
+    """Blend positive finite source projections, renormalizing missing inputs."""
+    weighted_total = 0.0
+    available_weight = 0.0
+    for source, value in projections.items():
+        value = _finite_float(value)
+        weight = _finite_float(weights.get(source))
+        if value is None or value <= 0 or weight is None or weight <= 0:
+            continue
+        weighted_total += value * weight
+        available_weight += weight
+    return weighted_total / available_weight if available_weight else 0.0
+
+
+def compute_role_trend_bonus(recent_share, earlier_share,
+                             points_per_share=6.0, max_bonus=1.0):
+    """Small capped point bonus for a sustained increase in target share."""
+    recent_share = _finite_float(recent_share)
+    earlier_share = _finite_float(earlier_share)
+    points_per_share = _finite_float(points_per_share)
+    max_bonus = _finite_float(max_bonus)
+    if (recent_share is None or earlier_share is None
+            or points_per_share is None or max_bonus is None
+            or points_per_share <= 0 or max_bonus <= 0):
+        return 0.0
+    increase = max(recent_share - earlier_share, 0.0)
+    return min(increase * points_per_share, max_bonus)
+
+
+def center_empirical_samples(samples, target_mean):
+    """Shift an empirical sample to a current projection without changing shape."""
+    target_mean = _finite_float(target_mean)
+    values = [_finite_float(value) for value in samples]
+    values = [value for value in values if value is not None]
+    if not values or target_mean is None:
+        return []
+    sample_mean = sum(values) / len(values)
+    return [value - sample_mean + target_mean for value in values]
 
 
 def qb_quality_multiplier(qb_projection, league_average,
@@ -315,10 +374,7 @@ def compute_wr_injury_bonus(pool, production_share, qb_multiplier=1.0,
 def compute_fp_projection(position, stats):
     """Convert a FantasyPros weekly stat dict to FanDuel points (non-PPR)."""
     def f(key):
-        try:
-            return float(stats.get(key) or 0)
-        except (TypeError, ValueError):
-            return 0.0
+        return _finite_float(stats.get(key)) or 0.0
 
     if position == 'QB':
         return (f('pass_yds') * 0.04 + f('pass_tds') * 4

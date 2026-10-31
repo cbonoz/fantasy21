@@ -37,7 +37,15 @@ NFL_TEAM_MAP = {
 TEAM_ABBR_ALIASES = {
     'LA': 'LAR', 'SL': 'LAR', 'STL': 'LAR',
     'JAX': 'JAC',
-    'OAK': 'LV', 'SD': 'LAC',
+    'OAK': 'LV', 'LVS': 'LV', 'SD': 'LAC',
+}
+
+PLAYER_NAME_ALIASES = {
+    # FanDuel/roster nickname vs. the player's official name in data feeds.
+    'hollywood brown': 'marquise brown',
+    'zonovan knight': 'bam knight',
+    # Generational suffix/punctuation inconsistencies across salary/stat feeds.
+    "tre' harris": 'tre harris',
 }
 
 
@@ -50,4 +58,5 @@ def normalize_player_name(name):
     parts = str(name).lower().replace('.', '').split()
     if parts and parts[-1] in {'jr', 'sr', 'ii', 'iii', 'iv', 'v'}:
         parts.pop()
-    return ' '.join(parts)
+    normalized = ' '.join(parts)
+    return PLAYER_NAME_ALIASES.get(normalized, normalized)

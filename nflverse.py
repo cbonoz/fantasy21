@@ -63,6 +63,55 @@ def prior_week_stats(week, season=None):
     return df[df['week'].astype(int) < week]
 
 
+def compute_recent_target_share_map(week, recent_weeks=None, season=None):
+    """Recent per-game target share by team/player for WRs, TEs, and RBs."""
+    recent_weeks = recent_weeks or config.UPSIDE_RECENT_GAMES
+    prior = prior_week_stats(week, season)
+    recent = prior[prior['week'].astype(int) >= max(1, week - recent_weeks)]
+    shares = defaultdict(list)
+    for row in recent.itertuples(index=False):
+        target_share = row._asdict().get('target_share')
+        if row.position not in ('WR', 'TE', 'RB') or pd.isna(target_share):
+            continue
+        team = normalize_team_abbr(row.team)
+        name = normalize_player_name(row.player_display_name)
+        if team and name:
+            shares[(team, name)].append(float(target_share))
+    return {key: sum(values) / len(values) for key, values in shares.items() if values}
+
+
+def compute_target_share_trend_map(week, recent_weeks=None, season=None):
+    """Recent vs. earlier target share by (team, normalized player name)."""
+    recent_weeks = recent_weeks or config.UPSIDE_RECENT_GAMES
+    prior = prior_week_stats(week, season)
+    recent_start = max(1, week - recent_weeks)
+    shares = defaultdict(lambda: {'recent': [], 'earlier': []})
+    for row in prior.itertuples(index=False):
+        target_share = row._asdict().get('target_share')
+        if row.position not in ('WR', 'TE', 'RB') or pd.isna(target_share):
+            continue
+        team = normalize_team_abbr(row.team)
+        name = normalize_player_name(row.player_display_name)
+        if not team or not name:
+            continue
+        period = 'recent' if int(row.week) >= recent_start else 'earlier'
+        shares[(team, name)][period].append(float(target_share))
+
+    trends = {}
+    for key, periods in shares.items():
+        recent_values, earlier_values = periods['recent'], periods['earlier']
+        if len(recent_values) < 3 or len(earlier_values) < 2:
+            continue
+        recent = sum(recent_values) / len(recent_values)
+        earlier = sum(earlier_values) / len(earlier_values)
+        trends[key] = {
+            'recent': recent,
+            'earlier': earlier,
+            'delta': recent - earlier,
+        }
+    return trends
+
+
 def compute_fpa_map(week, season=None):
     """
     Fantasy points allowed per team per position, averaged over prior weeks.
@@ -153,7 +202,7 @@ def compute_giveaway_map(week, season=None):
 
 def compute_upside_map(week, season=None):
     """
-    Per-player upside: the ~75th-percentile FanDuel-game from prior weeks
+    Per-player upside: the configured high-percentile FanDuel score from prior weeks
     (falling back to the average). Used to tilt projections toward ceiling in
     GPP mode. Uses an interpolated percentile so a three- or four-game sample
     cannot collapse to its single maximum game. Kept un-smoothed: ceilings of
@@ -165,15 +214,49 @@ def compute_upside_map(week, season=None):
     acc = defaultdict(list)
     for row in prior.itertuples(index=False):
         if row.position in OFFENSIVE_POSITIONS:
-            acc[normalize_player_name(row.player_display_name)].append(
-                compute_fd_points(row._asdict(), row.position))
+            target_share = (
+                row._asdict().get('target_share')
+                if row.position in ('WR', 'TE', 'RB') else None
+            )
+            if pd.isna(target_share):
+                target_share = None
+            else:
+                target_share = float(target_share)
+            acc[normalize_player_name(row.player_display_name)].append((
+                int(row.week),
+                compute_fd_points(row._asdict(), row.position),
+                target_share,
+            ))
     upside = {}
-    for name, vals in acc.items():
-        if not vals:
+    recent_games = config.UPSIDE_RECENT_GAMES
+    for name, records in acc.items():
+        if not records:
             continue
+        records.sort(key=lambda item: item[0])
+        vals = [score for _, score, _ in records]
         avg = sum(vals) / len(vals)
-        pct = float(pd.Series(vals).quantile(0.75))
-        upside[name] = round(max(pct, avg), 3)
+        pct = float(pd.Series(vals).quantile(config.GPP_UPSIDE_PERCENTILE))
+        ceiling = max(pct, avg)
+
+        # A season-wide percentile can lag when a young player earns a larger
+        # role late in the season. Let recent outcomes inform ceiling only when
+        # target share confirms that the role itself has grown.
+        recent = records[-recent_games:]
+        earlier = records[:-recent_games]
+        recent_shares = [share for _, _, share in recent if share is not None]
+        earlier_shares = [share for _, _, share in earlier if share is not None]
+        if len(recent_shares) >= 3 and len(earlier_shares) >= 2:
+            recent_target_share = sum(recent_shares) / len(recent_shares)
+            earlier_target_share = sum(earlier_shares) / len(earlier_shares)
+            if (recent_target_share - earlier_target_share
+                    >= config.ROLE_TREND_MIN_TARGET_SHARE_DELTA):
+                recent_scores = [score for _, score, _ in recent]
+                recent_ceiling = float(pd.Series(recent_scores).quantile(
+                    config.GPP_UPSIDE_PERCENTILE
+                ))
+                ceiling = max(ceiling, recent_ceiling)
+
+        upside[name] = round(ceiling, 3)
     return upside
 
 
@@ -201,6 +284,26 @@ def compute_score_distributions(week, season=None):
             defense_weeks[team][int(row.week)] += compute_defense_fd_points(row._asdict())
     defense_scores = {team: list(weeks.values()) for team, weeks in defense_weeks.items()}
     return dict(player_scores), defense_scores
+
+
+def compute_defense_upside_map(week, season=None):
+    """Per-team DST ceiling uplift from the big-play tail, above its mean.
+
+    Defense history here excludes points-allowed scoring, so return only the
+    high-percentile surplus. The caller adds that surplus to its full-scoring
+    FanDuel/Sleeper baseline rather than treating big plays as the whole DST
+    projection.
+    """
+    _, defense_scores = compute_score_distributions(week, season)
+    result = {}
+    for team, values in defense_scores.items():
+        if not values:
+            continue
+        scores = pd.Series(values, dtype=float)
+        percentile = float(scores.quantile(config.GPP_UPSIDE_PERCENTILE))
+        mean = float(scores.mean())
+        result[team] = round(max(percentile - mean, 0.0), 3)
+    return result
 
 
 def compute_history(week, season=None):

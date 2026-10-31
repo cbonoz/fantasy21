@@ -7,6 +7,9 @@ from projection import (
     calculate_temperature_factor,
     calculate_wind_factor,
     cap_projection,
+    blend_available_projections,
+    compute_role_trend_bonus,
+    center_empirical_samples,
     compute_defense_fd_points,
     compute_fd_points,
     compute_fp_projection,
@@ -41,6 +44,9 @@ class TestTemperatureFactor:
     def test_neutral_without_temp(self):
         assert calculate_temperature_factor(None, 'QB') == 1.0
 
+    def test_zero_degrees_is_a_valid_cold_temperature(self):
+        assert calculate_temperature_factor(0, 'QB') == 0.96
+
     def test_nan_is_neutral(self):
         assert calculate_temperature_factor(float('nan'), 'WR') == 1.0
 
@@ -68,6 +74,9 @@ class TestPrecipitationFactor:
 
     def test_rain_boosts_rb(self):
         assert calculate_precipitation_factor(80, 'RB') > 1.0
+
+    def test_moderate_chance_alone_causes_only_small_passing_penalty(self):
+        assert calculate_precipitation_factor(43, 'WR') == pytest.approx(0.98)
 
 
 class TestComputeTeamTotals:
@@ -127,6 +136,14 @@ class TestComputeFdPoints:
                  'receiving_tds': 1, 'fumbles_lost_total': 0}
         assert compute_fd_points(stats, 'RB') == pytest.approx(25.0)
 
+    def test_two_point_conversions_and_return_tds_score(self):
+        qb = {'passing_2pt_conversions': 1, 'rushing_2pt_conversions': 1,
+              'special_teams_tds': 1}
+        receiver = {'receiving_2pt_conversions': 1, 'rushing_2pt_conversions': 1,
+                    'special_teams_tds': 1}
+        assert compute_fd_points(qb, 'QB') == pytest.approx(10.0)
+        assert compute_fd_points(receiver, 'WR') == pytest.approx(10.0)
+
     def test_kicker_distance_buckets(self):
         stats = {'fg_made_20_29': 1, 'fg_made_40_49': 1, 'fg_made_50_59': 1, 'pat_made': 2}
         assert compute_fd_points(stats, 'K') == pytest.approx(3 + 4 + 5 + 2)
@@ -140,12 +157,24 @@ class TestComputeFdPoints:
     def test_lost_fumble_is_two_points_for_qbs(self):
         assert compute_fd_points({'fumbles_lost_total': 1}, 'QB') == -2.0
 
+    def test_missing_nan_stats_are_zero(self):
+        assert compute_fd_points({'receiving_yards': float('nan')}, 'TE') == 0.0
+
 
 class TestComputeDefenseFdPoints:
     def test_big_play_scoring(self):
         stats = {'def_tds': 1, 'def_interceptions': 2, 'def_fumbles_forced': 1,
-                 'def_sacks': 3, 'def_safeties': 0, 'fumble_recovery_tds': 0}
+                 'fumble_recovery_opp': 1, 'def_sacks': 3, 'def_safeties': 0,
+                 'fumble_recovery_tds': 0}
         assert compute_defense_fd_points(stats) == pytest.approx(15.0)
+
+    def test_forced_fumble_is_not_a_recovery_and_blocks_score(self):
+        stats = {'def_fumbles_forced': 3, 'def_punt_blocks': 1,
+                 'def_fg_blocks': 1, 'def_pat_blocks': 1}
+        assert compute_defense_fd_points(stats) == pytest.approx(6.0)
+
+    def test_nan_defense_stats_are_zero(self):
+        assert compute_defense_fd_points({'def_sacks': float('nan')}) == 0.0
 
     def test_empty(self):
         assert compute_defense_fd_points({}) == 0.0
@@ -161,6 +190,62 @@ class TestBlendProjections:
 
     def test_missing_primary_returns_secondary(self):
         assert blend_projections(None, 10.0) == 10.0
+
+    def test_non_finite_inputs_are_treated_as_missing(self):
+        assert blend_projections(float('nan'), 10.0) == 10.0
+        assert blend_projections(10.0, float('nan')) == 10.0
+
+
+class TestBlendAvailableProjections:
+    def test_uses_normalized_source_weights(self):
+        projections = {
+            'fd_fppg': 16.9,
+            'nflverse_history': 11.061,
+            'sleeper': 11.02,
+            'fantasypros': 10.54,
+        }
+        weights = {
+            'fd_fppg': 0.20,
+            'nflverse_history': 0.10,
+            'sleeper': 0.35,
+            'fantasypros': 0.35,
+        }
+        expected = (16.9 * 0.2 + 11.061 * 0.1 + 11.02 * 0.35 + 10.54 * 0.35)
+        assert blend_available_projections(projections, weights) == pytest.approx(expected)
+
+    def test_renormalizes_when_sources_are_missing_or_invalid(self):
+        result = blend_available_projections(
+            {'fd_fppg': 10, 'nflverse_history': float('nan'), 'sleeper': 20},
+            {'fd_fppg': 0.20, 'nflverse_history': 0.10, 'sleeper': 0.35},
+        )
+        assert result == pytest.approx((10 * 0.20 + 20 * 0.35) / 0.55)
+
+    def test_returns_zero_when_no_positive_source_is_available(self):
+        assert blend_available_projections(
+            {'fd_fppg': 0, 'sleeper': None},
+            {'fd_fppg': 0.20, 'sleeper': 0.35},
+        ) == 0.0
+
+
+class TestRoleTrendBonus:
+    def test_rewards_target_share_growth_with_a_cap(self):
+        assert compute_role_trend_bonus(0.25, 0.10) == pytest.approx(0.9)
+        assert compute_role_trend_bonus(0.40, 0.10) == pytest.approx(1.0)
+
+    def test_no_growth_or_invalid_inputs_get_no_bonus(self):
+        assert compute_role_trend_bonus(0.10, 0.20) == 0.0
+        assert compute_role_trend_bonus(None, 0.10) == 0.0
+
+
+class TestCenterEmpiricalSamples:
+    def test_recent_game_shape_is_preserved_around_current_projection(self):
+        result = center_empirical_samples([2, 6, 10], target_mean=12)
+        assert result == pytest.approx([8, 12, 16])
+        assert sum(result) / len(result) == pytest.approx(12)
+
+    def test_invalid_samples_are_dropped(self):
+        result = center_empirical_samples([1, float('nan'), 3], target_mean=10)
+        assert result == pytest.approx([9, 11])
 
 
 class TestQbQualityMultiplier:

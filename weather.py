@@ -3,10 +3,12 @@ import pandas as pd
 import os
 import re
 import numpy as np
+import math
 from bs4 import BeautifulSoup
 from datetime import datetime
 
 import config
+from nfl_teams import NFL_TEAM_MAP, normalize_team_abbr
 from projection import (
     calculate_precipitation_factor,
     calculate_temperature_factor,
@@ -24,6 +26,44 @@ team_name_to_abbr = {
     'Broncos': 'DEN', 'Chiefs': 'KC', 'Chargers': 'LAC', 'Raiders': 'LV',
     'Washington': 'WAS',
 }
+
+
+def _optional_round(value, scale=1):
+    """Round a weather value, preserving missing data instead of inventing 0."""
+    try:
+        number = float(value) * scale
+    except (TypeError, ValueError):
+        return None
+    return round(number) if math.isfinite(number) else None
+
+
+def matchup_coverage(expected_matchups, weather_df):
+    """Compare weather rows with the slate, ignoring malformed extra rows."""
+    def normalize_weather_team(team):
+        name = str(team).strip()
+        abbreviation = team_name_to_abbr.get(name, NFL_TEAM_MAP.get(name, name))
+        return normalize_team_abbr(abbreviation)
+
+    def matchup_key(value):
+        parts = str(value).split('@')
+        if len(parts) != 2:
+            return None
+        teams = [normalize_weather_team(part) for part in parts]
+        return tuple(sorted(teams)) if all(teams) else None
+
+    expected = {key for key in map(matchup_key, expected_matchups) if key}
+    actual = set()
+    if weather_df is not None and not weather_df.empty:
+        for row in weather_df.itertuples(index=False):
+            teams = tuple(sorted((
+                normalize_weather_team(getattr(row, 'away_team', '')),
+                normalize_weather_team(getattr(row, 'home_team', '')),
+            )))
+            if all(teams):
+                actual.add(teams)
+    missing = sorted(expected - actual)
+    return len(expected) - len(missing), len(expected), missing
+
 
 def parse_weather_data(html_content):
     """Parse HTML content from NFLWeather.com and extract weather data for each game."""
@@ -178,11 +218,13 @@ def get_weather_from_action_network():
             weather_record = {
                 'away_team': away_team,
                 'home_team': home_team,
-                'temperature': round(forecast.get('temperature', 0)),
+                'temperature': _optional_round(forecast.get('temperature')),
                 'condition': forecast.get('description', ''),
-                'wind_speed': round(forecast.get('wind_speed', 0)),
+                'wind_speed': _optional_round(forecast.get('wind_speed')),
                 'wind_direction': forecast.get('wind_direction', ''),
-                'precipitation_chance': round(forecast.get('precipitation', 0) * 100) if forecast.get('precipitation') else 0,
+                'precipitation_chance': _optional_round(
+                    forecast.get('precipitation'), scale=100
+                ),
                 'matchup': f"{away_team}@{home_team}"
             }
             

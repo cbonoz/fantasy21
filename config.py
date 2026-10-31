@@ -13,6 +13,8 @@ ACTIVE_FOLDER = './active'
 UPLOAD_FOLDER = './upload'
 CACHE_FOLDER = './ranking'
 CACHE_MAX_AGE_DAYS = 3
+FANTASYPROS_CACHE_MAX_AGE_HOURS = 6
+FANTASYPROS_FAILURE_CACHE_HOURS = 2
 
 
 def cache_is_fresh(path):
@@ -34,7 +36,7 @@ SEASON_START = '09/13/2026'
 MAX_SALARY = 9900
 SALARY_MAX = 60000
 SALARY_MIN_OFFSET = 100
-SALARY_MIN_OFFSET_SINGLE = 300
+SALARY_MIN_OFFSET_SINGLE = 900
 MIN_SALARY_CLASSIC = 5000
 MIN_SALARY_SINGLE = 2000
 MIN_QB_SALARY_CLASSIC = 6800
@@ -44,13 +46,14 @@ ROSTER_SIZE_SINGLE = 6
 
 # Number of rows shown in the sorted defenses / QBs / MVPs printouts.
 TOP_N_DISPLAY = 10
+# Show a few more DSTs so low-cost ceiling plays aren't hidden just below top 10.
+TOP_N_DEFENSE_DISPLAY = 15
 
 # ============================================================
 # Projection weights
 # ============================================================
 
 WEIGHTED = True
-AVERAGE_WEIGHT = .5
 INJURY_FACTOR = .12
 # Partial credit for Questionable players (they often play, but a banged-up
 # starter still creates teammate opportunity). Out/IR get 1.0.
@@ -75,10 +78,16 @@ INJURY_QB_QUALITY_MIN = 0.85
 INJURY_QB_QUALITY_MAX = 1.15
 # History/ceiling smoothing: recent games decay exponentially in history.
 HISTORY_RECENCY_DECAY = 0.8
-# GPP upside tilt: blend projections toward each player's ceiling so lineups
-# target boom scores (needed for winning/top-10% GPP finishes). SINGLE outside
-# single-game; set 0 for strict cash optimization.
-GPP_UPSIDE_WEIGHT = 0.35
+# Recent role breakouts can raise a player's GPP ceiling above the full-season
+# percentile, but only with enough games and a material target-share increase.
+UPSIDE_RECENT_GAMES = 4
+GPP_UPSIDE_PERCENTILE = 0.85
+ROLE_TREND_MIN_TARGET_SHARE_DELTA = 0.03
+ROLE_TREND_POINT_WEIGHT = 6.0
+ROLE_TREND_MAX_BONUS = 1.0
+# Classic GPPs are treated as top-score contests: give expected points and an
+# 85th-percentile ceiling equal influence. Validate/tune this by backtesting.
+GPP_UPSIDE_WEIGHT = 0.50
 # Single-game contests reward ceiling outcomes, so the optimizer blends the
 # matchup-adjusted projection toward a player's historical ceiling.
 SHOWDOWN_UPSIDE_WEIGHT = 0.6
@@ -109,10 +118,10 @@ SINGLE_GAME_WR1_OVERRIDES = {
 # players (game-script benefit); RBs get full when their OWN QB is out.
 INJURED_QB_BONUS = 2.5
 # WR-injury pool is based on the injured players' typical production and
-# distributed by remaining receivers' production shares; do not amplify it.
+# distributed across active pass catchers by recent target share.
 WR_INHERITANCE_WEIGHT = 1.0
-# Cap on the per-team WR-injury pool so multiple absences cannot stack without bound.
-WR_INHERITANCE_CAP = 2.0
+# Cap on the per-team WR-vacancy pool so multiple absences cannot stack without bound.
+WR_INHERITANCE_CAP = 3.0
 # Multiplier on the opponent's net injury weakness (abs of excluded_bonus)
 # for defenses/MVPs: a weakened opponent offense helps the D.
 OPPONENT_INJURY_WEIGHT = 0.4
@@ -143,13 +152,19 @@ GIVEAWAY_SHRINKAGE_GAMES = 4.0
 FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points
 
 # ============================================================
-# Free data-source blends (nflverse + Sleeper)
+# Projection source weights
 # ============================================================
 
-# Weight on Sleeper's projection vs. the FanDuel/history base
-SLEEPER_WEIGHT = 0.3
-# Weight on FantasyPros' weekly projection vs. the base
-FANTASYPROS_WEIGHT = 0.25
+# FanDuel FPPG and nflverse history are both backward-looking; keep their
+# combined influence below the two independent weekly projection sources.
+# Missing/non-positive sources are excluded and the remaining weights are
+# renormalized before blending.
+PROJECTION_WEIGHTS = {
+    'fd_fppg': 0.20,
+    'nflverse_history': 0.10,
+    'sleeper': 0.35,
+    'fantasypros': 0.35,
+}
 # QB offense-snap share below which a QB is treated as a backup
 BACKUP_SNAP_THRESHOLD = 0.5
 USE_SNAP_BACKUP = True
@@ -166,25 +181,19 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-    'Aaron Jones Sr.', 'Jordan Mason',
-     'Mike Gesicki', 'Bijan Robinson', 'Zay Flowers', 'Matthew Stafford',  'Derrick Henry', 'Kirk Cousins', 'Omar Cooper Jr.', 'Darius Cooper', 'T.J. Hockenson',
-     'Ryan Flournoy', 'Travis Kelce', 'Tyler Huntley', 'Jaylen Waddle', 'Joe Burrow',   'George Pickens', 'Dak Prescott', 'Garrett Wilson', 'George Kittle',
-       'Nico Collins', 'Sam LaPorta', 'Jaylin Noel', 'Tre Tucker', 'Patrick Mahomes', 'Tyler Shough', "Ja'Marr Chase", 'Aaron Rodgers', 'Bryce Young',
+    # 'Cincinnati Bengals', 'Travis Kelce', 'Jameson Williams', 'Kyren Williams',
+    # 'Josh Allen', 'Zay Flowers', 'CeeDee Lamb',  'Keon Coleman', 'Chase Brown', 'Ryan Flournoy', 'Mike Gesicki', 'Hunter Henry', 'Bucky Irving'
+    # 'Cincinnati Bengals' 'Jaxon Smith-Njigba', 'Cincinnati Bengals', 'DeMario Douglas'
+    # 'Javonte Williams', 'Kyren Williams', 'Zay Flowers', "D'Andre Swift", "Josh Allen", 'T.J. Hockenson', 'Mike Gesicki'
+    # 'Aaron Jones Sr.', 'Jameson Williams', 'Jordan Mason',  'Mike Gesicki', 'Bijan Robinson', 'Zay Flowers', 'Matthew Stafford',  'Derrick Henry', 'Kirk Cousins', 'Omar Cooper Jr.', 'Darius Cooper', 'T.J. Hockenson',
+    #  'Ryan Flournoy', 'Travis Kelce', 'Tyler Huntley', 'Jaylen Waddle', 'Joe Burrow',   'George Pickens', 'Dak Prescott', 'Garrett Wilson', 'George Kittle',
+    #    'Nico Collins', 'Sam LaPorta', 'Jaylin Noel', 'Tre Tucker', 'Patrick Mahomes', 'Tyler Shough', "Ja'Marr Chase", 'Aaron Rodgers', 'Bryce Young',
     #     'Chris Olave',  'Jaxon Smith-Njigba', 'DeVonta Smith', 'Minnesota Vikings', 'Geno Smith', 'Aaron Jones Sr.', 'CeeDee Lamb', 'George Kittle', 'Chuba Hubbard'
 ]
-BANNED_SINGLE = [
-    'Rhamondre Stevenson',  'Hunter Henry', 'Kenneth Walker III (MVP)', 'Tory Horton', 'Kansas City Chiefs', 'Jalen Royals', 'Jalen Coker', 'Darnell Washington', 'Pittsburgh Steelers'
-    # "D'Andre Swift (MVP)", 'Rhamondre Stevenson', 'Chicago Bears', 'Rhamondre Stevenson (MVP)', 'Hunter Henry'
+BANNED_SINGLE = ['Malik Washington (MVP)', 'Rhamondre Stevenson',  'Rhamondre Stevenson (MVP)', 'Malik Willis (MVP)', 'Eli Raridon', 'Washington Commanders (MVP)'
 ]
 
 LOCKED = [
-    # 'Emanuel Wilson'
-    # 'Germie Bernard', 'Devaughn Vele'
-    # 'Carnell Tate', 'Kyren Williams'
-    # 'Germie Bernard', 'Kyren Williams', 'Woody Marks', 'Jordan Love', 'Isaiah Likely', 'Javonte Williams'
-    # 'Matthew Golden', 'Jordan Love'
-    # 'Aaron Jones Sr.', 'Kyren Williams', 'Jahmyr Gibbs'
-    #  'Jahmyr Gibbs', 'Nico Collins', 'Chuba Hubbard', 'Garrett Wilson'
-    # 'Jordan Love'
+    # 'Trevor Lawrence',  'Bijan Robinson', 'Kenneth Walker III', 'Jahmyr Gibbs','Detroit Lions', "Germie Bernard"
 ]
 BLOCKED_TEAMS = []

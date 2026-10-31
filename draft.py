@@ -12,6 +12,7 @@ from draftfast.csv_parse import salary_download
 from draftfast.lineup_constraints import LineupConstraints
 from draftfast.optimize import run
 from draftfast.settings import OptimizerSettings, CustomRule
+import fantasypros
 from fantasypros import build_projection_map as build_fp_projection_map
 from nfl_teams import NFL_TEAM_MAP, normalize_player_name, normalize_team_abbr
 import numpy as np
@@ -21,15 +22,32 @@ from projection import (
     calculate_precipitation_factor,
     calculate_temperature_factor,
     calculate_wind_factor,
-    blend_projections,
+    blend_available_projections,
     cap_projection,
+    center_empirical_samples,
+    compute_role_trend_bonus,
     compute_team_totals,
     compute_wr_injury_bonus,
     qb_quality_multiplier,
 )
-from nflverse import compute_fpa_map, compute_giveaway_map, compute_history, compute_qb_snap_share_map, compute_score_distributions, compute_upside_map
+from nflverse import (
+    compute_fpa_map,
+    compute_defense_upside_map,
+    compute_giveaway_map,
+    compute_history,
+    compute_qb_snap_share_map,
+    compute_recent_target_share_map,
+    compute_score_distributions,
+    compute_target_share_trend_map,
+    compute_upside_map,
+)
 from sleeper import build_projection_map
-from weather import display_weather_summary, get_nfl_weather, team_name_to_abbr
+from weather import (
+    display_weather_summary,
+    get_nfl_weather,
+    matchup_coverage,
+    team_name_to_abbr,
+)
 
 import config
 
@@ -105,9 +123,10 @@ def print_data_status():
     print_banner("DATA SOURCES", 60)
     if not DATA_STATUS:
         print("  (no sources tracked)")
+    name_width = max(20, max((len(name) for name in DATA_STATUS), default=0))
     for name in sorted(DATA_STATUS):
         status, detail = DATA_STATUS[name]
-        print(f"  {name:<20} {status:<18} {detail}")
+        print(f"  {name:<{name_width}} {status:<18} {detail}")
     print("=" * 60)
 
 # ============================================================
@@ -209,10 +228,17 @@ if not weather_df.empty:
     if weather_df.empty:
         _record_source('Weather', False, 'no valid team matchups for this week')
     else:
-        detail = f"{len(weather_df)} valid games"
+        covered_matchups, expected_matchups, missing_matchups = matchup_coverage(
+            df['Game'].dropna().astype(str), weather_df
+        )
+        detail = f"{covered_matchups}/{expected_matchups} slate matchups covered"
         if invalid_count:
             detail += f"; ignored {invalid_count} invalid rows"
-        _record_source('Weather', invalid_count == 0, detail)
+        if missing_matchups:
+            detail += f"; missing {missing_matchups} matchups"
+        _record_source('Weather', not missing_matchups, detail)
+        if missing_matchups:
+            print(f"WARNING: weather missing for slate matchups: {missing_matchups}")
 else:
     _record_source('Weather', False, 'no data for this week')
 
@@ -253,6 +279,21 @@ except Exception as e:
     print('Error loading nflverse history:', e)
     historic_averages = {}
 
+recent_target_share_map = {}
+try:
+    recent_target_share_map = compute_recent_target_share_map(WEEK) or {}
+    _record_source('Recent pass-catcher usage', bool(recent_target_share_map),
+                   f"{len(recent_target_share_map)} player entries")
+    role_trend_map = compute_target_share_trend_map(WEEK) or {}
+    _record_source('Target-share trends', bool(role_trend_map),
+                   f"{len(role_trend_map)} player entries")
+except Exception as e:
+    _record_source('Recent pass-catcher usage', False, str(e))
+    _record_source('Target-share trends', False, str(e))
+    print('Error loading recent receiving usage:', e)
+    recent_target_share_map = {}
+    role_trend_map = {}
+
 # ============================================================
 # Sleeper projections (independent weekly projection source)
 # ============================================================
@@ -272,9 +313,23 @@ except Exception as e:
 # ============================================================
 
 fp_proj_map = {}
+fp_source_status = {
+    'status': 'unavailable', 'requested_week': WEEK,
+    'source_week': None, 'detail': 'not loaded',
+}
 try:
     fp_proj_map = build_fp_projection_map(WEEK) or {}
-    _record_source('FantasyPros', bool(fp_proj_map), f"{len(fp_proj_map)} projections")
+    fp_source_status = fantasypros.get_projection_source_status()
+    if fp_source_status.get('source_week') not in (None, WEEK):
+        # Previous-week projections are useful provenance, not valid current
+        # inputs. Let the normalized blend fall back to the other sources.
+        print(f"Ignoring stale FantasyPros week {fp_source_status.get('source_week')} fallback")
+        fp_proj_map = {}
+    _record_source(
+        'FantasyPros',
+        bool(fp_proj_map) and fp_source_status.get('status') == 'ok',
+        f"{len(fp_proj_map)} projections; {fp_source_status.get('detail', 'unknown source status')}",
+    )
     print(f"Loaded {len(fp_proj_map)} FantasyPros projections")
 except Exception as e:
     _record_source('FantasyPros', False, str(e))
@@ -308,9 +363,9 @@ excluded_bonus = defaultdict(lambda: 0)
 # team pool, which leaked an injured RB's workload to tight ends too).
 pos_bonus = defaultdict(lambda: 0)
 injured_qb = defaultdict(lambda: False)
-# When a team's WR is out, the remaining WRs inherit the targets: extra pool
-# that only WRs on the team receive (on top of the shared excluded_bonus).
-wr_bonus = defaultdict(lambda: 0)
+# When a team's WR is out, remaining pass catchers inherit some of the target
+# pool, allocated by recent target share (on top of the shared excluded_bonus).
+pass_catcher_bonus = defaultdict(lambda: 0)
 
 # Identify each team's available QB and project their quality from the same
 # season/history/weekly sources used for player projections. Prefer prior snap
@@ -328,14 +383,14 @@ for _, qb in qb_candidates.iterrows():
     name = normalize_player_name(qb['Name'])
     fppg = float(qb['FPPG']) if pd.notna(qb['FPPG']) else 0.0
     history = historic_averages.get(name)
-    base = (config.AVERAGE_WEIGHT * fppg + (1 - config.AVERAGE_WEIGHT) * history
-            if history else fppg)
     sleeper_qb = sleeper_proj_map.get((team, 'QB', name))
     fp_qb = fp_proj_map.get((team, 'QB', name))
-    if sleeper_qb is not None:
-        base = blend_projections(base, sleeper_qb, config.SLEEPER_WEIGHT)
-    if fp_qb is not None:
-        base = blend_projections(base, fp_qb, config.FANTASYPROS_WEIGHT)
+    base = blend_available_projections({
+        'fd_fppg': fppg,
+        'nflverse_history': history,
+        'sleeper': sleeper_qb,
+        'fantasypros': fp_qb,
+    }, config.PROJECTION_WEIGHTS)
     snap_share = qb_snap_share_map.get((team, name))
     played = float(qb['Played']) if pd.notna(qb['Played']) else 0.0
     # Candidates with snap-share data outrank those without it; otherwise use
@@ -390,7 +445,7 @@ for index, p in questionable_df.iterrows():
                 amt = injury_offset * config.INJURY_SKILL_MULTIPLIER * weight
                 pos_bonus[(p['Team'], pos)] += amt
                 if pos == 'WR':
-                    wr_bonus[p['Team']] += amt
+                    pass_catcher_bonus[p['Team']] += amt
             else:
                 amt = injury_offset * weight
             excluded_bonus[p['Team']] += amt
@@ -438,7 +493,6 @@ ALL_POSITIONS = [*ACTIVE_RULE_SET.defensive_positions, *ACTIVE_RULE_SET.offensiv
 # Build player pool + adjusted projections
 # ============================================================
 
-AVERAGE_WEIGHT = config.AVERAGE_WEIGHT
 MIN_PLAYED = min(int(WEEK * 0.4), 2)
 MIN_QB_SALARY = config.MIN_QB_SALARY_SINGLE if SINGLE_GAME else config.MIN_QB_SALARY_CLASSIC
 MIN_SCORE = config.MIN_SCORE
@@ -539,18 +593,20 @@ def calculate_injury_bonuses(p, opponent):
     # Defenses get no own-team injury bonus (a team's own offensive injuries
     # don't help its defense); the opponent's injuries are handled separately
     # in calculate_adjusted_projection.
-    # WRs on a team with an injured WR inherit the vacated targets INSTEAD of
-    # the shared pool (both would double-count the same vacated production),
-    # split by each WR's share of the team's production.
-    if p.pos == 'WR':
-        bonuses += compute_wr_injury_bonus(
-            wr_bonus.get(p.team, 0),
-            wr_base_shares.get(p.team, {}).get(p.name, 0),
+    # Active pass catchers share vacated WR targets. RB/TE absences also retain
+    # the same-position workload bonus below.
+    if p.pos in ('WR', 'TE', 'RB'):
+        vacated_targets_bonus = compute_wr_injury_bonus(
+            pass_catcher_bonus.get(p.team, 0),
+            pass_catcher_base_shares.get(p.team, {}).get(p.name, 0),
             qb_quality_factors.get(p.team, 1.0),
             config.WR_INHERITANCE_CAP,
             config.WR_INHERITANCE_WEIGHT,
         )
-    elif p.pos in ('RB', 'TE'):
+        bonuses += vacated_targets_bonus
+        if vacated_targets_bonus > 0:
+            p.kv_store['vacated_targets_bonus'] = vacated_targets_bonus
+    if p.pos in ('RB', 'TE'):
         bonuses += pos_bonus.get((p.team, p.pos), 0) * qb_quality_factors.get(p.team, 1.0)
     if p.pos == 'RB' and injured_qb.get(p.team, False):
         bonuses += INJURED_QB_BONUS
@@ -558,11 +614,13 @@ def calculate_injury_bonuses(p, opponent):
 
 
 def get_blended_projection(p, history_key):
-    """Blend current projection with historical average when available."""
-    history_value = historic_averages.get(history_key)
-    if history_value:
-        return AVERAGE_WEIGHT * p.proj + (1 - AVERAGE_WEIGHT) * history_value
-    return p.proj
+    """Blend current FPPG, nflverse history, Sleeper, and FantasyPros inputs."""
+    return blend_available_projections({
+        'fd_fppg': p.proj,
+        'nflverse_history': historic_averages.get(history_key),
+        'sleeper': sleeper_projection_for(p),
+        'fantasypros': fp_projection_for(p),
+    }, config.PROJECTION_WEIGHTS)
 
 
 def history_key_for(p):
@@ -652,20 +710,9 @@ def calculate_adjusted_projection(p):
 
     # Kickers and cheap non-defense players just blend with history + projections
     if p.pos == 'K' or (p.cost <= config.LOW_SALARY_SKIP and p.pos != 'D'):
-        base = get_blended_projection(p, history_key_for(p))
-        for source in (sleeper_projection_for, fp_projection_for):
-            secondary = source(p)
-            if secondary is not None:
-                weight = config.SLEEPER_WEIGHT if source is sleeper_projection_for else config.FANTASYPROS_WEIGHT
-                base = blend_projections(base, secondary, weight)
-        return base
+        return get_blended_projection(p, history_key_for(p))
 
     base_score = get_blended_projection(p, history_key_for(p))
-    for source in (sleeper_projection_for, fp_projection_for):
-        secondary = source(p)
-        if secondary is not None:
-            weight = config.SLEEPER_WEIGHT if source is sleeper_projection_for else config.FANTASYPROS_WEIGHT
-            base_score = blend_projections(base_score, secondary, weight)
     p.kv_store['base_proj'] = base_score
 
     opponent = get_opponent(p)
@@ -687,6 +734,23 @@ def calculate_adjusted_projection(p):
 
     # Injury adjustments
     matchup_bonus += calculate_injury_bonuses(p, opponent)
+
+    # A sustained rise in target share is an early signal of a changing role;
+    # give it a small capped median-projection adjustment, separate from the
+    # recent-ceiling tilt used for GPPs.
+    if p.pos in ('WR', 'TE', 'RB'):
+        usage = role_trend_map.get((
+            normalize_team_abbr(p.team), normalize_player_name(p.name)
+        ))
+        if usage and usage['delta'] >= config.ROLE_TREND_MIN_TARGET_SHARE_DELTA:
+            role_bonus = compute_role_trend_bonus(
+                usage['recent'], usage['earlier'],
+                config.ROLE_TREND_POINT_WEIGHT,
+                config.ROLE_TREND_MAX_BONUS,
+            )
+            matchup_bonus += role_bonus
+            if role_bonus:
+                p.kv_store['role_trend_bonus'] = role_bonus
 
     # Defenses/MVPs also account for opponent offense weakness.
     # excluded_bonus is negative when the opponent's QB is out (and positive
@@ -719,50 +783,98 @@ def calculate_adjusted_projection(p):
 
 players = salary_download.generate_players_from_csvs(salary_file_location=ACTIVE_FILE, game=rules.FAN_DUEL)
 
-# Each remaining WR's share of the team's WR production: vacated targets flow
-# mostly to the WR who already produces (best proxy for who runs the routes),
-# not equally to every depth WR on the roster.
-wr_base_shares = defaultdict(dict)
-wr_base_totals = defaultdict(float)
+# Distribute vacated WR targets among active pass catchers using recent target
+# share, so an emerging role can outrank season-to-date fantasy points. Fall
+# back to FPPG if recent usage is unavailable for the whole team.
+pass_catcher_base_shares = defaultdict(dict)
+pass_catcher_usage_totals = defaultdict(float)
+pass_catcher_fppg_totals = defaultdict(float)
+pass_catcher_recent_usage = defaultdict(dict)
 for p in players:
-    if p.pos == 'WR':
-        wr_base_totals[p.team] += float(p.kv_store.get('FPPG') or 0)
+    if p.pos in ('WR', 'TE', 'RB'):
+        fppg = float(p.kv_store.get('FPPG') or 0)
+        usage = recent_target_share_map.get((
+            normalize_team_abbr(p.team), normalize_player_name(p.name)
+        ), 0.0)
+        pass_catcher_fppg_totals[p.team] += max(fppg, 0.0)
+        pass_catcher_recent_usage[p.team][p.name] = max(float(usage or 0), 0.0)
+        pass_catcher_usage_totals[p.team] += max(float(usage or 0), 0.0)
 for p in players:
-    if p.pos == 'WR' and wr_base_totals[p.team] > 0:
-        wr_base_shares[p.team][p.name] = (float(p.kv_store.get('FPPG') or 0)) / wr_base_totals[p.team]
+    if p.pos not in ('WR', 'TE', 'RB'):
+        continue
+    if pass_catcher_usage_totals[p.team] > 0:
+        pass_catcher_base_shares[p.team][p.name] = (
+            pass_catcher_recent_usage[p.team].get(p.name, 0.0)
+            / pass_catcher_usage_totals[p.team]
+        )
+    elif pass_catcher_fppg_totals[p.team] > 0:
+        fppg = max(float(p.kv_store.get('FPPG') or 0), 0.0)
+        pass_catcher_base_shares[p.team][p.name] = (
+            fppg / pass_catcher_fppg_totals[p.team]
+        )
 
 for p in players:
     p.proj = calculate_adjusted_projection(p)
     p.kv_store['adjusted_proj'] = p.proj
 
-if fp_proj_map:
-    fp_matched = sum(fp_projection_for(p) is not None for p in players)
-    _record_source(
-        'FantasyPros',
-        fp_matched == len(players),
-        f"{len(fp_proj_map)} projections; matched {fp_matched}/{len(players)} active players",
-    )
-    if fp_matched < len(players):
-        print(f"WARNING: FantasyPros has no projection for {len(players) - fp_matched}/{len(players)} active slate players")
+def _has_projection(value):
+    try:
+        return value is not None and np.isfinite(float(value)) and float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _player_labels(players, limit=8):
+    labels = [f"{p.name} ({p.team}/{p.pos})" for p in players[:limit]]
+    omitted = len(players) - len(labels)
+    if omitted:
+        labels.append(f"+{omitted} more")
+    return ', '.join(labels)
+
 
 # GPP upside tilt: blend projections toward each player's ceiling so lineups
 # target boom scores (single-game winners / top-10% GPP finishes) instead of
 # point-expectation averages. Also surfaces cheap high-ceiling plays.
+upside_map = {}
+defense_upside_map = {}
 upside_weight = config.SHOWDOWN_UPSIDE_WEIGHT if SINGLE_GAME else config.GPP_UPSIDE_WEIGHT
 sneaky_upside_plays = []
 if upside_weight > 0:
     try:
         upside_map = compute_upside_map(WEEK) or {}
-        _record_source('Upside/ceiling', bool(upside_map), f"{len(upside_map)} players")
+        defense_upside_map = compute_defense_upside_map(WEEK) or {}
+        ceiling_players = [p for p in players if p.pos in ('QB', 'RB', 'WR', 'TE')]
+        ceiling_matched = sum(
+            _has_projection(upside_map.get(normalize_player_name(p.name)))
+            for p in ceiling_players
+        )
+        _record_source(
+            'Upside/ceiling', ceiling_matched == len(ceiling_players),
+            f"{len(upside_map)} history entries; matched {ceiling_matched}/{len(ceiling_players)} active skill players",
+        )
+        _record_source(
+            'DST ceiling', bool(defense_upside_map),
+            f"big-play ceiling surplus available for {len(defense_upside_map)} team defenses; points-allowed variance excluded",
+        )
     except Exception as e:
         _record_source('Upside/ceiling', False, str(e))
+        _record_source('DST ceiling', False, str(e))
         print('Error loading upside data:', e)
         upside_map = {}
+        defense_upside_map = {}
     w = upside_weight
     for p in players:
-        ceiling = upside_map.get(normalize_player_name(p.name))
-        if not ceiling:
-            continue
+        if p.pos == 'D':
+            surplus = defense_upside_map.get(normalize_team_abbr(p.team).lower())
+            if surplus is None:
+                continue
+            base = p.kv_store.get('base_proj') or p.proj
+            def_ceiling_cap = min(config.MAX_SCORE, base * config.MAX_DEF_MULTIPLIER)
+            ceiling = min(p.proj + surplus, max(def_ceiling_cap, p.proj))
+        else:
+            ceiling = upside_map.get(normalize_player_name(p.name))
+            if not ceiling:
+                continue
         # Preserve each player's best available ceiling for tournament (WTA)
         # lineup ranking, even when the current projection is already higher.
         p.kv_store['ceiling'] = max(ceiling, p.proj)
@@ -878,16 +990,16 @@ filtered_mvps = filter_mvps(mvps, players, starter_map)
 # ============================================================
 
 PROJ_TABLE_HEADER = (f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} "
-                     f"{'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'Base':>8} {'Weather':>8}")
+                     f"{'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'BlendBase':>10} {'Weather':>8}")
 
 
 def _proj_row(name, proj, cost, value, team_total, total_deviation, base_fppg, opp, weather):
     arrow = '↓' if weather < 0.85 else ''
     return (f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x "
-            f"{team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>8.2f} {weather:>7.3f}{arrow}")
+            f"{team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>10.2f} {weather:>7.3f}{arrow}")
 
 
-def print_sorted_proj_table(title, rows, width=108):
+def print_sorted_proj_table(title, rows, width=110):
     """Print a QB/skill-position table (shared header and row format)."""
     print_table(title, PROJ_TABLE_HEADER, [_proj_row(r[0], *r[2:]) for r in rows], width)
 
@@ -896,7 +1008,7 @@ print_table(
     "SORTED DEFENSES",
     f"{'Team':<8} {'Proj':>8} {'Salary':>10} {'Base':>8} {'Spread':>8} {'Opp':>5} {'Value':>8}",
     [f"{team:<8} {proj:>8.2f} ${cost:>9,.0f} {base_fppg:>8.2f} {spread:>8.2f} {opp:>5} {(value * 1000):>7.1f}x"
-     for team, proj, cost, value, base_fppg, spread, opp in sorted(defenses, key=lambda x: x[3], reverse=True)[:config.TOP_N_DISPLAY]],
+     for team, proj, cost, value, base_fppg, spread, opp in sorted(defenses, key=lambda x: x[3], reverse=True)[:config.TOP_N_DEFENSE_DISPLAY]],
     61,
 )
 
@@ -912,6 +1024,31 @@ if SINGLE_GAME:
 print_sorted_proj_table("SORTED QBs", sorted(qbs, key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
 for _pos in ('RB', 'WR', 'TE'):
     print_sorted_proj_table(f"SORTED {_pos}s", sorted((s for s in skills if s[1] == _pos), key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
+
+role_risers = []
+for p in players:
+    if p.pos not in ('WR', 'TE', 'RB'):
+        continue
+    usage = role_trend_map.get((
+        normalize_team_abbr(p.team), normalize_player_name(p.name)
+    ))
+    role_bonus = float(p.kv_store.get('role_trend_bonus') or 0)
+    vacancy_bonus = float(p.kv_store.get('vacated_targets_bonus') or 0)
+    if role_bonus > 0 or vacancy_bonus > 0:
+        role_risers.append((p, usage or {}, role_bonus, vacancy_bonus))
+role_risers.sort(key=lambda item: (item[3] + item[2]), reverse=True)
+if role_risers:
+    print_table(
+        "ROLE / INJURY OPPORTUNITY SIGNALS",
+        f"{'Player':<27} {'Pos':<3} {'Team':<4} {'Salary':>8} {'Prior':>8} {'Recent':>8} {'Vacated+':>8} {'Role+':>7} {'Proj':>7} {'Value':>7}",
+        [f"{p.name:<27} {p.pos:<3} {p.team:<4} ${p.cost:>7,} "
+         f"{usage.get('earlier', 0) * 100:>7.1f}% {usage.get('recent', 0) * 100:>7.1f}% "
+         f"{vacancy_bonus:>7.2f} {role_bonus:>6.2f} "
+         f"{p.proj:>7.2f} {(p.proj / p.cost * 1000):>6.2f}x"
+         for p, usage, role_bonus, vacancy_bonus
+         in role_risers[:max(config.TOP_N_DISPLAY, 15)]],
+        109,
+    )
 
 if SINGLE_GAME:
     # A showdown slate is one game; showing the rest of the week's forecast is
@@ -934,6 +1071,10 @@ constraints = LineupConstraints(locked=config.LOCKED, banned=BANNED)
 
 def block_function(p):
     store = p.kv_store
+    # A missing baseline plus failed projection sources must not be mistaken
+    # for a cheap usable player, especially when solver constraints tighten.
+    if not _has_projection(p.proj):
+        return True
     played = int(float(store.get('Played') or 0))
     if SINGLE_GAME:
         if played < MIN_PLAYED:
@@ -1053,14 +1194,6 @@ def build_optimizer_settings(players, block_function):
             )
         )
 
-    # Never pair a defense with offensive players from the team it faces:
-    # both bet on opposite outcomes of the same game.
-    #
-    # Use draftfast's built-in setting, which adds a pairwise constraint
-    # (D <= 1 - each opposing offensive player). A single CustomRule with
-    # `sum(a) + sum(b) <= 1` would instead cap the opponent's ENTIRE offense
-    # at one player, making same-team stacks (e.g. QB + WR) impossible to
-    # build and therefore impossible to lock.
     return OptimizerSettings(
         custom_rules=custom_rules,
         min_teams=3,
@@ -1314,23 +1447,33 @@ def select_wta_portfolio(rosters, players, count):
     samples = {}
 
     def sample_vector(p):
-        """Empirical score samples for one roster entry (cached per name)."""
-        if p.name in samples:
-            return samples[p.name]
-        values = None
-        if p.pos == 'MVP':
-            base = p.kv_store.get('base_name', p.name.replace(' (MVP)', ''))
-            raw = player_scores.get(normalize_player_name(base))
-            values = [v * 1.5 for v in raw] if raw else None
-        elif p.pos == 'D':
-            values = defense_scores.get(p.team.lower())
-        elif p.pos != 'K':
-            values = player_scores.get(normalize_player_name(p.name))
-        # No history (kickers) -> hold at projection: no simulated variance.
-        vec = (rng.choice(np.asarray(values, dtype=float), size=WTA_SIMS)
-               if values else np.full(WTA_SIMS, p.proj))
-        samples[p.name] = vec
-        return vec
+        """Empirical residuals centered on this week's projection.
+
+        The source-history samples contribute variance/tail shape, while the
+        actual mean reflects current sources, injuries, Vegas, and weather.
+        Regular/MVP versions share one underlying player sample.
+        """
+        is_mvp = p.pos == 'MVP'
+        multiplier = 1.5 if is_mvp else 1.0
+        if p.pos == 'D':
+            sample_key = ('D', p.team)
+            raw = defense_scores.get(p.team.lower())
+        else:
+            base_name = (p.kv_store.get('base_name')
+                         or p.name.replace(' (MVP)', ''))
+            player_key = normalize_player_name(base_name)
+            sample_key = ('player', player_key)
+            raw = player_scores.get(player_key) if p.pos != 'K' else None
+
+        if sample_key not in samples:
+            target_mean = p.proj / multiplier
+            centered = center_empirical_samples(raw or [], target_mean)
+            samples[sample_key] = (
+                rng.choice(np.asarray(centered, dtype=float), size=WTA_SIMS)
+                if centered else np.full(WTA_SIMS, target_mean)
+            )
+        vec = samples[sample_key]
+        return vec * multiplier
 
     scores = np.zeros((len(rosters), WTA_SIMS), dtype=np.float32)
     for i, roster in enumerate(rosters):
@@ -1526,6 +1669,91 @@ if sneaky_upside_plays:
     )
     print("=" * 66)
 
+def record_optimizer_source_coverage():
+    """Report source coverage for players that the optimizer can actually use."""
+    eligible = [
+        p for p in players
+        if p.pos != 'MVP' and not block_function(p)
+    ]
+    pool_count = sum(p.pos != 'MVP' for p in players)
+    skill_players = [p for p in eligible if p.pos in ('QB', 'RB', 'WR', 'TE')]
+    history_players = skill_players
+
+    history_matched = sum(
+        _has_projection(historic_averages.get(history_key_for(p)))
+        for p in history_players
+    )
+    sleeper_matched = sum(_has_projection(sleeper_projection_for(p)) for p in eligible)
+    fp_matched = sum(_has_projection(fp_projection_for(p)) for p in eligible)
+    fppg_matched = sum(_has_projection(p.kv_store.get('FPPG')) for p in eligible)
+    source_inputs = [
+        (
+            _has_projection(historic_averages.get(history_key_for(p))),
+            _has_projection(sleeper_projection_for(p)),
+            _has_projection(fp_projection_for(p)),
+            _has_projection(p.kv_store.get('FPPG')),
+        )
+        for p in eligible
+    ]
+    salary_history_only = sum(
+        not has_sleeper and not has_fp and (has_history or has_fppg)
+        for has_history, has_sleeper, has_fp, has_fppg in source_inputs
+    )
+    no_positive_sources = sum(not any(inputs) for inputs in source_inputs)
+
+    _record_source(
+        'FanDuel FPPG', True,
+        f"salary file loaded; positive prior FPPG for {fppg_matched}/{len(eligible)} optimizer-eligible ({pool_count} player pool)",
+    )
+    _record_source(
+        'History (nflverse)', history_matched == len(history_players),
+        f"{len(historic_averages)} entries; matched {history_matched}/{len(history_players)} eligible skill players",
+    )
+    _record_source(
+        'Sleeper', sleeper_matched == len(eligible),
+        f"{len(sleeper_proj_map)} projections; matched {sleeper_matched}/{len(eligible)} eligible ({pool_count} player pool)",
+    )
+    fp_detail = fp_source_status.get('detail', 'source unavailable')
+    if 'returned HTTP 200 without tables' in fp_detail:
+        fp_detail = 'HTML returned no projection table for any position; prior-week cache not used'
+    _record_source(
+        'FantasyPros',
+        bool(fp_proj_map) and fp_matched == len(eligible) and fp_source_status.get('status') == 'ok',
+        f"{len(fp_proj_map)} current-week projections; matched {fp_matched}/{len(eligible)} eligible; method={fp_source_status.get('method', 'unknown')}; {fp_detail}",
+    )
+    _record_source(
+        'Projection fallback', no_positive_sources == 0,
+        f"{salary_history_only} eligible rely on salary/history only; {no_positive_sources} have no positive inputs",
+    )
+
+    upside_matched = sum(
+        _has_projection(upside_map.get(normalize_player_name(p.name)))
+        for p in skill_players
+    )
+    _record_source(
+        'Upside/ceiling', upside_matched == len(skill_players),
+        f"{len(upside_map)} history entries; matched {upside_matched}/{len(skill_players)} eligible skill players",
+    )
+    defenses = [p for p in eligible if p.pos == 'D']
+    dst_ceiling_matched = sum(
+        normalize_team_abbr(p.team).lower() in defense_upside_map for p in defenses
+    )
+    _record_source(
+        'DST ceiling', dst_ceiling_matched == len(defenses),
+        f"big-play-tail surplus; matched {dst_ceiling_matched}/{len(defenses)} eligible defenses; points-allowed variance excluded",
+    )
+
+    sleeper_missing = [p for p in eligible if not _has_projection(sleeper_projection_for(p))]
+    fp_missing = [p for p in eligible if not _has_projection(fp_projection_for(p))]
+    if sleeper_missing:
+        print(f"WARNING: Sleeper missing {len(sleeper_missing)}/{len(eligible)} optimizer-eligible players: {_player_labels(sleeper_missing)}")
+    if fp_missing:
+        print(f"WARNING: FantasyPros missing current-week projections for {len(fp_missing)}/{len(eligible)} optimizer-eligible players")
+    if upside_matched < len(skill_players):
+        print(f"WARNING: historical ceiling unavailable for {len(skill_players) - upside_matched}/{len(skill_players)} optimizer-eligible skill players")
+
+
+record_optimizer_source_coverage()
 print_data_status()
 
 # ============================================================
