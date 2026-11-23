@@ -230,7 +230,7 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-     'Kyle Monangai', 'Xavier Worthy', 'Josh Allen', 'Ty Johnson', "Amon-Ra St. Brown"
+     'Kyle Monangai', 'Josh Allen', 'Ty Johnson', "James Cook III"
 ]
 BANNED_SINGLE = [
     'Gavin Bartholomew', 'Jordan Watkins', 'Christian Watson (MVP)', 'Colby Parkinson', 'Matthew Golden (MVP)', 'Matthew Stafford (MVP)',
