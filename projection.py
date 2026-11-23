@@ -3,6 +3,7 @@
 
 
 import math
+import statistics
 
 
 def _finite_float(value):
@@ -262,6 +263,7 @@ def compute_fd_points(stats, position):
     if position in ('RB', 'WR', 'TE'):
         return (f('rushing_yards') * 0.1 + f('rushing_tds') * 6
                 + f('receiving_yards') * 0.1 + f('receiving_tds') * 6
+                + f('receptions') * 0.5
                 + (f('rushing_2pt_conversions') + f('receiving_2pt_conversions')) * 2
                 + f('special_teams_tds') * 6
                 - f('fumbles_lost_total') * 2)
@@ -329,6 +331,141 @@ def compute_role_trend_bonus(recent_share, earlier_share,
     return min(increase * points_per_share, max_bonus)
 
 
+def compute_role_competition_penalty(
+        recent_share, earlier_share, returning_teammate_share,
+        min_share_drop=0.12, min_teammate_share=0.15,
+        points_per_share=5.0, max_penalty=2.5):
+    """Bounded projection penalty for a role lost to a meaningful teammate return."""
+    recent_share = _finite_float(recent_share)
+    earlier_share = _finite_float(earlier_share)
+    returning_teammate_share = _finite_float(returning_teammate_share)
+    min_share_drop = _finite_float(min_share_drop)
+    min_teammate_share = _finite_float(min_teammate_share)
+    points_per_share = _finite_float(points_per_share)
+    max_penalty = _finite_float(max_penalty)
+    if any(value is None for value in (
+            recent_share, earlier_share, returning_teammate_share,
+            min_share_drop, min_teammate_share, points_per_share, max_penalty)):
+        return 0.0
+    share_drop = earlier_share - recent_share
+    if (share_drop < min_share_drop
+            or returning_teammate_share < min_teammate_share
+            or points_per_share <= 0 or max_penalty <= 0):
+        return 0.0
+    return min(share_drop * points_per_share, max_penalty)
+
+
+def compute_recent_form_adjustment(
+        recent_scores, season_scores, weight=0.35, prior_games=2.0,
+        max_adjustment=1.5, min_recent_games=3, min_prior_games=2):
+    """Return a bounded, shrinkage-adjusted recent median scoring trend.
+
+    The recent sample must contain enough appearances and leave a minimum
+    number of earlier games for comparison. Median scores reduce sensitivity
+    to a single outlier; the reliability factor shrinks short recent samples
+    toward no adjustment.
+    """
+    recent = [_finite_float(value) for value in recent_scores or []]
+    season = [_finite_float(value) for value in season_scores or []]
+    recent = [value for value in recent if value is not None]
+    season = [value for value in season if value is not None]
+    try:
+        weight = float(weight)
+        prior_games = float(prior_games)
+        max_adjustment = float(max_adjustment)
+        min_recent_games = int(min_recent_games)
+        min_prior_games = int(min_prior_games)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if (not math.isfinite(weight) or not math.isfinite(prior_games)
+            or not math.isfinite(max_adjustment) or prior_games < 0
+            or max_adjustment <= 0 or weight <= 0
+            or len(recent) < min_recent_games
+            or len(season) - len(recent) < min_prior_games):
+        return 0.0
+
+    recent_median = statistics.median(recent)
+    season_median = statistics.median(season)
+    reliability = len(recent) / (len(recent) + prior_games)
+    adjustment = (recent_median - season_median) * weight * reliability
+    return max(min(adjustment, max_adjustment), -max_adjustment)
+
+
+def allocate_vacated_role_bonus(bonus, active_weights):
+    """Distribute an injured player's role bonus across active teammates.
+
+    Weights should represent recent workload (opportunities first, snaps or
+    production as fallbacks). Invalid/negative weights are ignored rather than
+    turning a missing-data case into an equal bonus for every player.
+    """
+    bonus = _finite_float(bonus)
+    if bonus is None or bonus <= 0 or not active_weights:
+        return {}
+    weights = {
+        player: max(_finite_float(weight) or 0.0, 0.0)
+        for player, weight in active_weights.items()
+    }
+    total = sum(weights.values())
+    if total <= 0:
+        return {}
+    return {player: bonus * weight / total for player, weight in weights.items() if weight > 0}
+
+
+def adjust_ceiling_for_role_change(ceiling, role_bonus, weight=1.0, max_bonus=2.0):
+    """Carry a capped current-role point adjustment into a player's ceiling."""
+    ceiling = _finite_float(ceiling)
+    role_bonus = _finite_float(role_bonus)
+    weight = _finite_float(weight)
+    max_bonus = _finite_float(max_bonus)
+    if ceiling is None:
+        return None
+    if role_bonus is None or weight is None or max_bonus is None:
+        return ceiling
+    uplift = min(max(role_bonus, 0.0) * max(weight, 0.0), max(max_bonus, 0.0))
+    return ceiling + uplift
+
+
+def compute_kicker_total_bonus(team_total, average_total, weight=0.10, max_bonus=0.75):
+    """Small bounded kicker opportunity adjustment from Vegas implied total."""
+    team_total = _finite_float(team_total)
+    average_total = _finite_float(average_total)
+    weight = _finite_float(weight)
+    max_bonus = _finite_float(max_bonus)
+    if (team_total is None or average_total is None or weight is None
+            or max_bonus is None or weight <= 0 or max_bonus <= 0):
+        return 0.0
+    deviation = team_total - average_total
+    return max(min(deviation * weight, max_bonus), -max_bonus)
+
+
+def adjust_ceiling_for_weather(ceiling, weather_factor, max_adjustment=0.40):
+    """Apply a bounded positional weather factor to an empirical ceiling."""
+    ceiling = _finite_float(ceiling)
+    weather_factor = _finite_float(weather_factor)
+    max_adjustment = _finite_float(max_adjustment)
+    if ceiling is None:
+        return None
+    if weather_factor is None or max_adjustment is None or max_adjustment < 0:
+        return ceiling
+    factor = max(min(weather_factor, 1.0 + max_adjustment), 1.0 - max_adjustment)
+    return ceiling * factor
+
+
+def compute_same_team_wr_overlap_penalty(team_wr_counts, penalty_per_extra=2.0):
+    """Penalize actual roster overlap, leaving standalone WR projections intact."""
+    penalty_per_extra = _finite_float(penalty_per_extra)
+    if penalty_per_extra is None or penalty_per_extra <= 0:
+        return 0.0
+    penalty = 0.0
+    for count in team_wr_counts.values():
+        try:
+            extras = max(int(count) - 1, 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        penalty += extras * penalty_per_extra
+    return penalty
+
+
 def center_empirical_samples(samples, target_mean):
     """Shift an empirical sample to a current projection without changing shape."""
     target_mean = _finite_float(target_mean)
@@ -355,6 +492,64 @@ def qb_quality_multiplier(qb_projection, league_average,
     return max(min_multiplier, min(max_multiplier, 1.0 + weight * relative_deviation))
 
 
+def compute_qb_health_drop(primary_projection, primary_unavailability,
+                           replacements):
+    """Expected QB projection loss from an uncertain primary and known backups.
+
+    `replacements` is ordered best-to-worst, as (projection, unavailability)
+    pairs. If no positive backup projection is available, return zero rather
+    than inventing a replacement-level estimate from missing data.
+    """
+    primary_projection = _finite_float(primary_projection)
+    primary_unavailability = _finite_float(primary_unavailability)
+    if (primary_projection is None or primary_projection <= 0
+            or primary_unavailability is None):
+        return 0.0
+    primary_unavailability = min(max(primary_unavailability, 0.0), 1.0)
+    valid_replacements = []
+    for projection, unavailability in replacements or []:
+        projection = _finite_float(projection)
+        unavailability = _finite_float(unavailability)
+        if projection is None or projection <= 0 or unavailability is None:
+            continue
+        valid_replacements.append((projection, min(max(unavailability, 0.0), 1.0)))
+    if not valid_replacements or primary_unavailability <= 0:
+        return 0.0
+
+    # Roll availability odds down the depth chart. The lowest known positive
+    # projection is the fallback when no further QB projection is available.
+    expected_replacement = valid_replacements[-1][0]
+    for projection, unavailability in reversed(valid_replacements[:-1]):
+        expected_replacement = (
+            projection * (1.0 - unavailability)
+            + expected_replacement * unavailability
+        )
+    expected_team_qb = (
+        primary_projection * (1.0 - primary_unavailability)
+        + expected_replacement * primary_unavailability
+    )
+    return max(primary_projection - expected_team_qb, 0.0)
+
+
+def compute_qb_pass_catcher_penalty(qb_projection_drop, player_projection,
+                                    sensitivity=0.15, projection_scale=15.0,
+                                    max_penalty=1.25):
+    """Bounded WR/TE deduction from an expected QB-quality drop."""
+    qb_projection_drop = _finite_float(qb_projection_drop)
+    player_projection = _finite_float(player_projection)
+    sensitivity = _finite_float(sensitivity)
+    projection_scale = _finite_float(projection_scale)
+    max_penalty = _finite_float(max_penalty)
+    if (qb_projection_drop is None or player_projection is None
+            or sensitivity is None or projection_scale is None
+            or max_penalty is None or projection_scale <= 0
+            or sensitivity <= 0 or max_penalty <= 0):
+        return 0.0
+    penalty = max(qb_projection_drop, 0.0) * max(player_projection, 0.0)
+    penalty *= sensitivity / projection_scale
+    return min(penalty, max_penalty)
+
+
 def compute_wr_injury_bonus(pool, production_share, qb_multiplier=1.0,
                             pool_cap=2.0, inheritance_weight=1.0):
     """Allocate a capped share of vacated WR production, adjusted for QB quality."""
@@ -372,7 +567,7 @@ def compute_wr_injury_bonus(pool, production_share, qb_multiplier=1.0,
 
 
 def compute_fp_projection(position, stats):
-    """Convert a FantasyPros weekly stat dict to FanDuel points (non-PPR)."""
+    """Convert a FantasyPros weekly stat dict to FanDuel half-PPR points."""
     def f(key):
         return _finite_float(stats.get(key)) or 0.0
 
@@ -382,10 +577,10 @@ def compute_fp_projection(position, stats):
                 - f('pass_ints') - f('fl') * 2)
     if position in ('RB', 'WR'):
         return (f('rush_yds') * 0.1 + f('rush_tds') * 6
-                + f('rec_yds') * 0.1 + f('rec_tds') * 6
+                + f('rec_yds') * 0.1 + f('rec_tds') * 6 + f('rec_rec') * 0.5
                 - f('fl') * 2)
     if position == 'TE':
-        return f('rec_yds') * 0.1 + f('rec_tds') * 6 - f('fl') * 2
+        return f('rec_yds') * 0.1 + f('rec_tds') * 6 + f('rec_rec') * 0.5 - f('fl') * 2
     if position == 'K':
         return f('fg') * 3 + f('xpt')
     return 0.0

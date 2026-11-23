@@ -9,6 +9,15 @@ from projection import (
     cap_projection,
     blend_available_projections,
     compute_role_trend_bonus,
+    compute_role_competition_penalty,
+    compute_recent_form_adjustment,
+    compute_qb_health_drop,
+    compute_qb_pass_catcher_penalty,
+    allocate_vacated_role_bonus,
+    adjust_ceiling_for_role_change,
+    adjust_ceiling_for_weather,
+    compute_kicker_total_bonus,
+    compute_same_team_wr_overlap_penalty,
     center_empirical_samples,
     compute_defense_fd_points,
     compute_fd_points,
@@ -125,6 +134,37 @@ class TestCapProjection:
         assert cap_projection(21.0, 20.0, 'QB') == 21.0
 
 
+class TestRoleAdjustments:
+    def test_vacated_bonus_follows_recent_workload_weights(self):
+        result = allocate_vacated_role_bonus(2.0, {'starter': 3, 'backup': 1})
+        assert result == {'starter': pytest.approx(1.5), 'backup': pytest.approx(0.5)}
+
+    def test_vacated_bonus_ignores_invalid_weights(self):
+        assert allocate_vacated_role_bonus(2.0, {'zero': 0, 'missing': float('nan')}) == {}
+
+    def test_role_signal_increases_ceiling_but_is_capped(self):
+        assert adjust_ceiling_for_role_change(8.0, 0.75) == pytest.approx(8.75)
+        assert adjust_ceiling_for_role_change(8.0, 5.0, max_bonus=1.5) == pytest.approx(9.5)
+
+    def test_negative_role_signal_does_not_reduce_historical_ceiling(self):
+        assert adjust_ceiling_for_role_change(8.0, -1.0) == pytest.approx(8.0)
+
+    def test_kicker_implied_total_bonus_is_small_and_bounded(self):
+        assert compute_kicker_total_bonus(24.0, 20.0) == pytest.approx(0.4)
+        assert compute_kicker_total_bonus(40.0, 20.0) == pytest.approx(0.75)
+        assert compute_kicker_total_bonus(None, 20.0) == 0
+
+    def test_weather_adjusts_empirical_ceiling_with_neutral_missing_fallback(self):
+        assert adjust_ceiling_for_weather(10.0, 0.9) == pytest.approx(9.0)
+        assert adjust_ceiling_for_weather(10.0, None) == pytest.approx(10.0)
+        assert adjust_ceiling_for_weather(10.0, 2.0) == pytest.approx(14.0)
+
+    def test_same_team_wr_penalty_only_applies_to_actual_lineup_overlap(self):
+        assert compute_same_team_wr_overlap_penalty({'PHI': 1, 'WAS': 1}) == 0
+        assert compute_same_team_wr_overlap_penalty({'PHI': 2, 'WAS': 1}) == pytest.approx(2)
+        assert compute_same_team_wr_overlap_penalty({'PHI': 3}) == pytest.approx(4)
+
+
 class TestComputeFdPoints:
     def test_qb(self):
         stats = {'passing_yards': 300, 'passing_tds': 3, 'rushing_yards': 20,
@@ -135,6 +175,9 @@ class TestComputeFdPoints:
         stats = {'rushing_yards': 100, 'rushing_tds': 1, 'receiving_yards': 30,
                  'receiving_tds': 1, 'fumbles_lost_total': 0}
         assert compute_fd_points(stats, 'RB') == pytest.approx(25.0)
+
+    def test_receiving_receptions_score_half_a_point_each(self):
+        assert compute_fd_points({'receptions': 4}, 'WR') == pytest.approx(2.0)
 
     def test_two_point_conversions_and_return_tds_score(self):
         qb = {'passing_2pt_conversions': 1, 'rushing_2pt_conversions': 1,
@@ -237,6 +280,45 @@ class TestRoleTrendBonus:
         assert compute_role_trend_bonus(None, 0.10) == 0.0
 
 
+class TestRoleCompetitionPenalty:
+    def test_penalizes_share_loss_after_a_meaningful_teammate_return(self):
+        assert compute_role_competition_penalty(
+            0.35, 0.75, 0.30,
+        ) == pytest.approx(2.0)
+
+    def test_caps_penalty_and_ignores_small_or_unsupported_changes(self):
+        assert compute_role_competition_penalty(
+            0.20, 0.90, 0.30,
+        ) == pytest.approx(2.5)
+        assert compute_role_competition_penalty(
+            0.65, 0.70, 0.30,
+        ) == 0.0
+        assert compute_role_competition_penalty(
+            0.35, 0.75, 0.08,
+        ) == 0.0
+        assert compute_role_competition_penalty(
+            None, 0.75, 0.30,
+        ) == 0.0
+
+
+class TestRecentFormAdjustment:
+    def test_recent_median_form_is_shrunk_and_bounded(self):
+        season = [5, 9, 16, 18, 19, 20, 29, 30]
+        recent = [29, 18, 9, 5]
+        result = compute_recent_form_adjustment(recent, season)
+        assert result == pytest.approx(-1.1666667)
+
+    def test_requires_recent_and_prior_game_samples(self):
+        assert compute_recent_form_adjustment([5, 20, 30], [5, 20, 30]) == 0.0
+        assert compute_recent_form_adjustment([5, 20], [5, 20, 30, 40]) == 0.0
+
+    def test_missing_and_non_finite_scores_are_ignored(self):
+        result = compute_recent_form_adjustment(
+            [None, 20, 22, 24], [5, 10, 18, 20, 22, 24]
+        )
+        assert result > 0
+
+
 class TestCenterEmpiricalSamples:
     def test_recent_game_shape_is_preserved_around_current_projection(self):
         result = center_empirical_samples([2, 6, 10], target_mean=12)
@@ -263,6 +345,21 @@ class TestQbQualityMultiplier:
         assert qb_quality_multiplier(None, 18.0) == pytest.approx(1.0)
 
 
+class TestQbHealthAdjustments:
+    def test_expected_qb_drop_accounts_for_primary_and_backup_availability(self):
+        assert compute_qb_health_drop(20, 0.5, [(12, 0)]) == pytest.approx(4.0)
+        assert compute_qb_health_drop(20, 0.5, [(12, 0.5), (8, 0)]) == pytest.approx(5.0)
+
+    def test_missing_backup_or_healthy_primary_has_no_drop(self):
+        assert compute_qb_health_drop(20, 0.5, []) == 0.0
+        assert compute_qb_health_drop(20, 0.0, [(12, 0)]) == 0.0
+
+    def test_pass_catcher_penalty_scales_with_projection_and_is_capped(self):
+        assert compute_qb_pass_catcher_penalty(4, 20) == pytest.approx(0.8)
+        assert compute_qb_pass_catcher_penalty(30, 30) == pytest.approx(1.25)
+        assert compute_qb_pass_catcher_penalty(None, 20) == 0.0
+
+
 class TestWrInjuryBonus:
     def test_caps_typical_production_then_splits_and_scales_by_qb(self):
         assert compute_wr_injury_bonus(2.4, 0.404, 1.098, 2.0, 1.0) == pytest.approx(0.887184)
@@ -278,14 +375,14 @@ class TestComputeFpProjection:
                  'pass_ints': 1, 'fl': 0}
         assert compute_fp_projection('QB', stats) == pytest.approx(10.4 + 8 + 2 - 1)
 
-    def test_skill_non_ppr(self):
+    def test_skill_uses_fanduel_half_ppr(self):
         stats = {'rush_yds': 90, 'rush_tds': 1, 'rec_rec': 5, 'rec_yds': 40,
                  'rec_tds': 0, 'fl': 0}
-        assert compute_fp_projection('RB', stats) == pytest.approx(9 + 6 + 4)
+        assert compute_fp_projection('RB', stats) == pytest.approx(9 + 6 + 4 + 2.5)
 
     def test_te(self):
         stats = {'rec_rec': 4, 'rec_yds': 50, 'rec_tds': 1, 'fl': 0}
-        assert compute_fp_projection('TE', stats) == pytest.approx(5 + 6)
+        assert compute_fp_projection('TE', stats) == pytest.approx(5 + 6 + 2)
 
     def test_kicker(self):
         assert compute_fp_projection('K', {'fg': 2, 'xpt': 3}) == pytest.approx(9)

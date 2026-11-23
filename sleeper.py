@@ -35,18 +35,27 @@ def get_projections(week, season=None):
 
 def build_projection_map(week, season=None):
     """
-    Map (team, position, normalized_full_name) -> Sleeper pts_std projection.
-    Standard (non-PPR) scoring, which is the closest match to FanDuel scoring.
-    Team defenses are keyed by (team, 'DEF', '').
+    Map (team, position, normalized_full_name) -> FanDuel half-PPR projection.
+    Prefer Sleeper's pts_half_ppr; convert pts_std by adding half a point per
+    projected reception when the half-PPR field is unavailable. Team defenses
+    are keyed by (team, 'DEF', '').
     """
     result = {}
     for entry in get_projections(week, season):
         stats = entry.get('stats') or {}
-        pts = stats.get('pts_std')
-        if pts is None:
-            continue
         player = entry.get('player') or {}
         position = player.get('position')
+        half_ppr = stats.get('pts_half_ppr')
+        pts = half_ppr if half_ppr is not None else stats.get('pts_std')
+        try:
+            pts = float(pts)
+        except (TypeError, ValueError):
+            continue
+        if half_ppr is None and position in ('RB', 'WR', 'TE'):
+            try:
+                pts += 0.5 * float(stats.get('rec') or 0)
+            except (TypeError, ValueError):
+                pass
         team = normalize_team_abbr(entry.get('team'))
         if position == 'DEF':
             if team:

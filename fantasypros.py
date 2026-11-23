@@ -1,7 +1,7 @@
 # FantasyPros weekly projections (https://www.fantasypros.com/nfl/projections).
-# Fetched from the standard projections pages (the /nfl/start/ tool is
-# WAF-protected); cached per WEEK, mirroring the weather/spread cache pattern.
-# Converted to FanDuel (non-PPR) scoring via projection.compute_fp_projection.
+# Parsed from the page's embedded reportConfig JSON when available, with the
+# older HTML table retained as a fallback; cached per WEEK.
+# Converted to FanDuel half-PPR scoring via projection.compute_fp_projection.
 
 import json
 import os
@@ -116,7 +116,71 @@ def _to_float(value):
 
 
 def _parse_position(position, html, diagnostics=None):
-    """Parse one position's projections table into normalized entries."""
+    """Parse one position's embedded report data or legacy projections table."""
+    marker = 'window.FP.reportConfig'
+    assignment = html.find(marker)
+    if assignment >= 0:
+        equals = html.find('=', assignment + len(marker))
+        try:
+            report, _ = json.JSONDecoder().raw_decode(html[equals + 1:].lstrip())
+        except (ValueError, TypeError):
+            if diagnostics is not None:
+                diagnostics.append('embedded reportConfig JSON could not be decoded')
+            return []
+
+        rows = (report.get('table') or {}).get('rows') if isinstance(report, dict) else None
+        if not isinstance(rows, list):
+            if diagnostics is not None:
+                diagnostics.append('embedded reportConfig has no table rows')
+            return []
+
+        def row_stat(row, key):
+            aliases = {
+                'rec_rec': ('rec_rec', 'rec_att'),
+                'fl': ('fl', 'fumbles'),
+                'sack': ('sack', 'def_sack'),
+                'int': ('int', 'def_int'),
+                'fr': ('fr', 'def_fr'),
+                'ff': ('ff', 'def_ff'),
+                'td': ('td', 'def_td'),
+                'safety': ('safety', 'def_safety'),
+                'pa': ('pa', 'def_pa'),
+                'yds_agn': ('yds_agn', 'def_tyda'),
+            }
+            for candidate in aliases.get(key, (key,)):
+                if candidate in row:
+                    return _to_float(row[candidate])
+            return 0.0
+
+        entries = []
+        for row in rows:
+            player = row.get('player') or {}
+            name = player.get('name') or player.get('player_name')
+            if not name:
+                continue
+            team = player.get('team') or NFL_TEAM_MAP.get(name, '')
+            if position == 'DST' and not team:
+                short_name = str(player.get('shortName') or '').strip()
+                team = short_name.split()[0] if short_name else ''
+            team_abbr = normalize_team_abbr(team)
+            if not team_abbr:
+                continue
+            stats = {key: row_stat(row, key) for key in POS_LAYOUT[position]}
+            entries.append({
+                'position': position,
+                'name': normalize_player_name(name),
+                'team': team_abbr,
+                'stats': stats,
+                'fpts': _to_float(row.get('fpts')),
+            })
+
+        if diagnostics is not None:
+            diagnostics.append(
+                f"embedded reportConfig supplied {len(rows)} rows; parsed {len(entries)}; "
+                "full-table pagination not exposed"
+            )
+        return entries
+
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, 'html.parser')
@@ -340,15 +404,19 @@ def get_projections(week):
                 )
                 if body_diagnostic is None:
                     body_diagnostic = _response_preview(resp.text)
-                print('fantasypros parse issue', slug, final_url,
+                log_label = 'fantasypros partial page' if position_entries else 'fantasypros parse issue'
+                print(log_label, slug, final_url,
                       parse_diagnostics[0], content_type, body_diagnostic)
             else:
                 print('fantasypros parsed', slug, len(position_entries), 'players')
 
     if entries:
+        # Keep partial current-week rows too. A degraded cache remains
+        # distinguishable by its sidecar, but can still contribute projections
+        # on subsequent runs instead of being mistaken for an empty scrape.
+        with open(cache_file, 'w') as f:
+            json.dump(entries, f)
         if not fetch_diagnostics:
-            with open(cache_file, 'w') as f:
-                json.dump(entries, f)
             detail = 'current-week fetch'
             _save_projection_status(week, 'ok', week, detail, method)
             print(f"Saved FantasyPros projections to {cache_file} ({len(entries)} players)")

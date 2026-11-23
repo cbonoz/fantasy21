@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -86,6 +87,59 @@ class TestGetProjectionsFallback:
         assert fantasypros.get_projection_source_status()['source_week'] == 2
         assert __import__('os').path.isfile(f"{tmp_path}/fantasypros_week_2.json")
         assert 'Saved FantasyPros projections' in capsys.readouterr().out
+
+    def test_parses_embedded_report_config_rows(self):
+        payload = {'table': {'rows': [{
+            'player': {'name': 'Jalen Hurts', 'team': 'PHI'},
+            'pass_yds': 240.5, 'pass_tds': 2, 'pass_ints': 1,
+            'rush_yds': 24, 'rush_tds': 1, 'fumbles': 0.2, 'fpts': 23.0,
+        }]}}
+        html = '<script>window.FP.reportConfig = ' + json.dumps(payload) + ';</script>'
+        diagnostics = []
+
+        entries = fantasypros._parse_position('QB', html, diagnostics)
+
+        assert len(entries) == 1
+        assert entries[0]['name'] == 'jalen hurts'
+        assert entries[0]['team'] == 'PHI'
+        assert entries[0]['stats']['pass_yds'] == pytest.approx(240.5)
+        assert entries[0]['stats']['fl'] == pytest.approx(0.2)
+        assert 'full-table pagination not exposed' in diagnostics[0]
+
+    def test_partial_embedded_rows_are_cached_and_reused(self, tmp_path, monkeypatch):
+        fantasypros.config.CACHE_FOLDER = str(tmp_path)
+        monkeypatch.delenv('FANTASYPROS_API_KEY', raising=False)
+        monkeypatch.delenv('FANTASYPROS_FORCE_REFRESH', raising=False)
+        payload = {'table': {'rows': [{
+            'player': {'name': 'Test Player', 'team': 'KC'},
+            'pass_yds': 100, 'pass_tds': 1, 'pass_ints': 0,
+            'rush_yds': 10, 'rush_tds': 0, 'rec_att': 3,
+            'rec_yds': 40, 'rec_tds': 0, 'fumbles': 0,
+            'fg': 1, 'fga': 1, 'xpt': 2, 'fpts': 12,
+            'def_sack': 2, 'def_int': 1, 'def_fr': 0, 'def_ff': 1,
+            'def_td': 0, 'def_safety': 0, 'def_pa': 20,
+            'def_tyda': 300,
+        }]}}
+        html = '<script>window.FP.reportConfig = ' + json.dumps(payload) + ';</script>'
+
+        class Resp:
+            status_code = 200
+            text = html
+            headers = {'Content-Type': 'text/html'}
+            url = 'https://www.fantasypros.com/nfl/projections/test.php'
+
+        calls = []
+        monkeypatch.setattr(
+            fantasypros.requests, 'get', lambda *args, **kwargs: calls.append(args[0]) or Resp()
+        )
+        entries = get_projections(9)
+
+        assert len(entries) == len(fantasypros.POSITIONS)
+        assert fantasypros.get_projection_source_status()['status'] == 'degraded'
+        cache_file = f"{tmp_path}/fantasypros_week_9.json"
+        assert os.path.isfile(cache_file)
+        assert get_projections(9) == entries
+        assert len(calls) == len(fantasypros.POSITIONS)
 
     def test_configured_api_key_uses_official_json_projections(self, tmp_path, monkeypatch):
         fantasypros.config.CACHE_FOLDER = str(tmp_path)

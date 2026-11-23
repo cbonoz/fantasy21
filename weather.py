@@ -4,6 +4,7 @@ import os
 import re
 import numpy as np
 import math
+import time
 from bs4 import BeautifulSoup
 from datetime import datetime
 
@@ -74,7 +75,14 @@ def parse_weather_data(html_content):
 
     # Find all game containers - look for sections with game info
     # The page structure has games in divs with specific classes
-    game_sections = soup.find_all('div', class_=re.compile('game|matchup', re.I))
+    # Prefer the individual game cards. Matching every class containing
+    # "game" also captured the week-wide parent container, mixing one game's
+    # matchup with conditions from later cards.
+    game_sections = soup.select('div.game-box')
+    if not game_sections:
+        game_sections = soup.find_all(
+            'div', class_=re.compile(r'^(?!container-).*(game|matchup)', re.I)
+        )
 
     if not game_sections:
         # Alternative approach: look for divs containing team names and weather
@@ -172,9 +180,95 @@ def extract_weather_from_text(text):
     return weather if weather else None
 
 
+def _action_network_weather_records(data):
+    """Parse Action Network's hourly forecasts using explicit home/away IDs."""
+    records = []
+    for game in data.get('games', []):
+        teams = game.get('teams', [])
+        by_id = {str(team.get('id')): team.get('abbr', '') for team in teams}
+        away = by_id.get(str(game.get('away_team_id')))
+        home = by_id.get(str(game.get('home_team_id')))
+        if not away or not home:
+            # Older responses may omit IDs; retain the legacy order as fallback.
+            if len(teams) < 2:
+                continue
+            away, home = teams[0].get('abbr', ''), teams[1].get('abbr', '')
+
+        forecasts = game.get('weather_forecast') or []
+        if not forecasts:
+            continue
+        start = pd.to_datetime(game.get('start_time'), utc=True, errors='coerce')
+        valid = [forecast for forecast in forecasts if isinstance(forecast, dict)]
+        if not valid:
+            continue
+        if pd.notna(start):
+            dated = []
+            for forecast in valid:
+                forecast_time = pd.to_datetime(
+                    forecast.get('date'), utc=True, errors='coerce'
+                )
+                if pd.notna(forecast_time):
+                    dated.append((abs((forecast_time - start).total_seconds()), forecast))
+            forecast = min(dated, key=lambda item: item[0])[1] if dated else valid[0]
+        else:
+            forecast = valid[0]
+
+        records.append({
+            'away_team': away,
+            'home_team': home,
+            'temperature': _optional_round(forecast.get('temperature')),
+            'condition': forecast.get('description', ''),
+            'wind_speed': _optional_round(forecast.get('wind_speed')),
+            'wind_direction': forecast.get('wind_direction', ''),
+            'precipitation_chance': _optional_round(
+                forecast.get('precipitation'), scale=100
+            ),
+            'matchup': f'{away}@{home}',
+        })
+    return pd.DataFrame(records)
+
+
+def _merge_weather_forecasts(primary, supplemental):
+    """Use the timestamped hourly forecast for matching games; retain page-only games."""
+    if primary is None or primary.empty:
+        return supplemental if supplemental is not None else pd.DataFrame()
+    if supplemental is None or supplemental.empty:
+        return primary
+
+    def normalize_weather_team(team):
+        name = str(team).strip()
+        abbreviation = team_name_to_abbr.get(name, NFL_TEAM_MAP.get(name, name))
+        return normalize_team_abbr(abbreviation)
+
+    def key(row):
+        return tuple(sorted((
+            normalize_weather_team(row.get('away_team')),
+            normalize_weather_team(row.get('home_team')),
+        )))
+
+    supplemental_by_matchup = {
+        key(row): row for row in supplemental.to_dict('records') if all(key(row))
+    }
+    merged = []
+    for row in primary.to_dict('records'):
+        forecast = supplemental_by_matchup.get(key(row))
+        if forecast:
+            # Keep the primary source's home/away mapping; Action Network's
+            # `teams` array is sorted by ID, not by game location.
+            for field in (
+                'temperature', 'condition', 'wind_speed', 'wind_direction',
+                'precipitation_chance',
+            ):
+                value = forecast.get(field)
+                if value is not None and pd.notna(value):
+                    row[field] = value
+        merged.append(row)
+    return pd.DataFrame(merged)
+
+
 def get_weather_from_action_network():
     """
-    Fetch weather data from Action Network API as a fallback source.
+    Fetch the timestamped hourly weather data from Action Network.
     
     @return: DataFrame with weather data for upcoming games
     """
@@ -185,67 +279,28 @@ def get_weather_from_action_network():
     }
     
     try:
-        print("Attempting fallback weather source: Action Network API")
+        print("Fetching supplemental weather source: Action Network API")
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         
         data = response.json()
-        games = data.get('games', [])
-        
-        if not games:
+        records = _action_network_weather_records(data)
+
+        if records.empty:
             print("No games found in Action Network response")
             return pd.DataFrame()
-        
-        weather_records = []
-        
-        for game in games:
-            # Get team information
-            teams = game.get('teams', [])
-            if len(teams) < 2:
-                continue
-            
-            away_team = teams[0].get('abbr', '')
-            home_team = teams[1].get('abbr', '')
-            
-            # Get weather forecast (use the first forecast entry for game time)
-            forecasts = game.get('weather_forecast', [])
-            if not forecasts:
-                continue
-            
-            forecast = forecasts[0]
-            
-            # Extract weather data
-            weather_record = {
-                'away_team': away_team,
-                'home_team': home_team,
-                'temperature': _optional_round(forecast.get('temperature')),
-                'condition': forecast.get('description', ''),
-                'wind_speed': _optional_round(forecast.get('wind_speed')),
-                'wind_direction': forecast.get('wind_direction', ''),
-                'precipitation_chance': _optional_round(
-                    forecast.get('precipitation'), scale=100
-                ),
-                'matchup': f"{away_team}@{home_team}"
-            }
-            
-            weather_records.append(weather_record)
-        
-        if weather_records:
-            print(f"Successfully retrieved {len(weather_records)} games from Action Network")
-            return pd.DataFrame(weather_records)
-        else:
-            print("No valid weather data extracted from Action Network response")
-            return pd.DataFrame()
+        print(f"Successfully retrieved {len(records)} games from Action Network")
+        return records
     
     except requests.RequestException as e:
         print(f"Error fetching from Action Network API: {e}")
         return pd.DataFrame()
 
 
-def get_nfl_weather(week=None, season=None):
+def get_nfl_weather(week=None, season=None, force_refresh=False):
     """
-    Fetch weather data from NFLWeather.com for a given week.
-    Falls back to Action Network API if primary source fails.
+    Fetch weekly weather data and merge matching game-time forecasts from
+    Action Network. Either source can serve as a fallback if the other fails.
 
     @param week: NFL week number (1-18 for regular season, or wild-card, etc.)
     @param season: NFL season year (defaults to config season)
@@ -264,7 +319,12 @@ def get_nfl_weather(week=None, season=None):
 
     # Check cache first
     cache_file = f"./ranking/weather_week{week}.csv"
-    if config.cache_is_fresh(cache_file):
+    weather_cache_fresh = (
+        os.path.isfile(cache_file)
+        and time.time() - os.path.getmtime(cache_file)
+        < config.WEATHER_CACHE_MAX_AGE_MINUTES * 60
+    )
+    if weather_cache_fresh and not force_refresh:
         print(f"Returning cached weather data for week {week}")
         return pd.read_csv(cache_file)
     if os.path.isfile(cache_file):
@@ -303,8 +363,11 @@ def get_nfl_weather(week=None, season=None):
 
         if df.empty:
             print(f"No weather data found for week {week}")
-            # Try fallback source
-            df = get_weather_from_action_network()
+        # Merge a timestamped hourly forecast into the weekly page values.
+        # This catches stale/coarse game-card values without losing games the
+        # hourly API does not cover.
+        action_df = get_weather_from_action_network()
+        df = _merge_weather_forecasts(df, action_df)
         
         if df.empty:
             print("No weather data available from any source")

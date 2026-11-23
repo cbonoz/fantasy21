@@ -54,3 +54,27 @@ class TestBuildProjectionMap:
         assert result[('LAC', 'WR', tre_key)] == 4.1
         bam_key = normalize_player_name('Bam Knight')
         assert result[('ARI', 'RB', bam_key)] == 5.78
+
+    def test_uses_sleeper_half_ppr_projection_when_available(self, monkeypatch):
+        projections = [{
+            'team': 'CHI',
+            'player': {'first_name': 'Luther', 'last_name': 'Burden', 'position': 'WR'},
+            'stats': {'pts_std': 8.0, 'pts_half_ppr': 10.5, 'rec': 5.0},
+        }]
+        monkeypatch.setattr(sleeper, 'get_projections', lambda week, season=None: projections)
+
+        result = build_projection_map(9)
+
+        assert result[('CHI', 'WR', 'luther burden')] == pytest.approx(10.5)
+
+    def test_converts_standard_projection_when_half_ppr_is_missing(self, monkeypatch):
+        projections = [{
+            'team': 'CHI',
+            'player': {'first_name': 'Luther', 'last_name': 'Burden', 'position': 'WR'},
+            'stats': {'pts_std': 8.0, 'rec': 5.0},
+        }]
+        monkeypatch.setattr(sleeper, 'get_projections', lambda week, season=None: projections)
+
+        result = build_projection_map(9)
+
+        assert result[('CHI', 'WR', 'luther burden')] == pytest.approx(10.5)

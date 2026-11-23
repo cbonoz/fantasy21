@@ -10,10 +10,15 @@ import pandas as pd
 
 import config
 from nfl_teams import normalize_player_name, normalize_team_abbr
-from projection import compute_defense_fd_points, compute_fd_points
+from projection import (
+    compute_defense_fd_points,
+    compute_fd_points,
+    compute_recent_form_adjustment,
+    compute_role_competition_penalty,
+)
 
 NFLVERSE_BASE = 'https://github.com/nflverse/nflverse-data/releases/download'
-OFFENSIVE_POSITIONS = ('QB', 'RB', 'WR', 'TE')
+OFFENSIVE_POSITIONS = ('QB', 'RB', 'WR', 'TE', 'K')
 DEFENSIVE_GROUPS = ('DL', 'LB', 'DB')
 
 
@@ -79,6 +84,234 @@ def compute_recent_target_share_map(week, recent_weeks=None, season=None):
             shares[(team, name)].append(float(target_share))
     return {key: sum(values) / len(values) for key, values in shares.items() if values}
 
+
+def compute_recent_opportunity_map(week, recent_weeks=None, season=None):
+    """Recent touches/targets and snap share by player, team, and position.
+
+    RB opportunity is carries plus targets; WR/TE opportunity is targets.
+    Per-game rates use games with a recorded player row, while opportunity
+    share uses each player's total in the recent window. The map is strictly
+    prior-week data, so it can inform a current injury-driven role change
+    without leaking this week's results.
+    """
+    recent_weeks = recent_weeks or config.UPSIDE_RECENT_GAMES
+    recent_start = max(1, week - recent_weeks)
+    try:
+        stats = prior_week_stats(week, season)
+        recent_stats = stats[stats['week'].astype(int) >= recent_start]
+    except Exception as exc:
+        print(f'Could not load recent player opportunities: {exc}')
+        recent_stats = pd.DataFrame()
+    usage = defaultdict(lambda: {'opportunities': 0.0, 'games': 0, 'points': 0.0})
+
+    def number(row, field):
+        try:
+            value = float(row.get(field, 0) or 0)
+            return value if pd.notna(value) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    for row in recent_stats.to_dict('records'):
+        pos = row.get('position')
+        if pos not in ('RB', 'WR', 'TE'):
+            continue
+        team = normalize_team_abbr(row.get('team'))
+        name = normalize_player_name(row.get('player_display_name'))
+        if not team or not name:
+            continue
+        opportunities = number(row, 'targets')
+        if pos == 'RB':
+            opportunities += number(row, 'carries')
+        entry = usage[(team, pos, name)]
+        entry['opportunities'] += opportunities
+        entry['games'] += 1
+        entry['points'] += compute_fd_points(row, pos)
+
+    snap_totals = defaultdict(lambda: {'share': 0.0, 'games': 0})
+    try:
+        snaps = get_snap_counts(week, season)
+        snaps = snaps[
+            (snaps['week'].astype(int) >= recent_start)
+            & (snaps['week'].astype(int) < week)
+            & snaps['position'].isin(('RB', 'WR', 'TE'))
+            & snaps['offense_pct'].notna()
+        ]
+        for row in snaps.to_dict('records'):
+            team = normalize_team_abbr(row.get('team'))
+            name = normalize_player_name(row.get('player'))
+            if not team or not name:
+                continue
+            entry = snap_totals[(team, row['position'], name)]
+            entry['share'] += number(row, 'offense_pct')
+            entry['games'] += 1
+    except Exception as exc:
+        print(f'Could not load recent offensive snap shares: {exc}')
+
+    team_totals = defaultdict(float)
+    for (team, pos, _), entry in usage.items():
+        team_totals[(team, pos)] += entry['opportunities']
+
+    result = {}
+    for key in set(usage) | set(snap_totals):
+        entry = usage.get(key, {'opportunities': 0.0, 'games': 0, 'points': 0.0})
+        snaps = snap_totals.get(key, {})
+        games = entry['games']
+        opportunities = entry['opportunities']
+        result[key] = {
+            'opportunities': opportunities,
+            'opportunities_per_game': opportunities / games if games else 0.0,
+            'opportunity_share': opportunities / team_totals[key[:2]]
+            if team_totals[key[:2]] > 0 else 0.0,
+            'points_per_opportunity': entry['points'] / opportunities
+            if opportunities > 0 else 0.0,
+            'snap_share': snaps.get('share', 0.0) / snaps.get('games', 1)
+            if snaps.get('games', 0) else 0.0,
+            'games': max(games, snaps.get('games', 0)),
+        }
+    return result
+
+
+def compute_returning_competition_map(week, available_players=None, season=None):
+    """Estimate role loss when an available teammate returns after an absence.
+
+    Compare each teammate's opportunity share in games shared with the returner
+    against games during the absence. Require multiple games in both samples and
+    a meaningful returner role; otherwise make no adjustment.
+    """
+    try:
+        stats = prior_week_stats(week, season)
+    except Exception as exc:
+        print(f'Could not load returning-teammate role data: {exc}')
+        return {}
+    if stats.empty:
+        return {}
+
+    def number(value):
+        try:
+            value = float(value)
+            return max(value, 0.0) if pd.notna(value) else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    weekly = defaultdict(lambda: defaultdict(float))
+    for row in stats[stats['position'].isin(('RB', 'WR', 'TE'))].to_dict('records'):
+        team = normalize_team_abbr(row.get('team'))
+        pos = row.get('position')
+        name = normalize_player_name(row.get('player_display_name'))
+        try:
+            game_week = int(row.get('week'))
+        except (TypeError, ValueError):
+            continue
+        if team and name:
+            targets = number(row.get('targets'))
+            carries = number(row.get('carries')) if pos == 'RB' else 0.0
+            weekly[(team, pos)][(game_week, name)] += targets + carries
+
+    available = defaultdict(dict)
+    if isinstance(available_players, dict):
+        available_entries = available_players.items()
+    else:
+        available_entries = ((key, 1.0) for key in available_players or ())
+    for (team, pos, name), weight in available_entries:
+        try:
+            weight = min(max(float(weight), 0.0), 1.0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        if weight:
+            available[(team, pos)][name] = weight
+
+    results = {}
+    for role, player_weeks in weekly.items():
+        team, pos = role
+        game_weeks = sorted({w for w, _ in player_weeks})
+        if len(game_weeks) < 4:
+            continue
+        latest_week = game_weeks[-1]
+
+        def team_total(game_week):
+            return sum(value for (w, _), value in player_weeks.items()
+                       if w == game_week)
+
+        for returner, availability in available.get(role, {}).items():
+            appearances = sorted(
+                w for (w, name), opportunities in player_weeks.items()
+                if name == returner and opportunities > 0
+            )
+            if len(appearances) < 2:
+                continue
+
+            gaps = [
+                (before, after) for before, after in zip(appearances, appearances[1:])
+                if after - before >= config.RETURNING_ROLE_MIN_ABSENCE_WEEKS
+            ]
+            if gaps:
+                absence_start, return_week = gaps[-1]
+                # Don't keep applying an old return adjustment after the role
+                # has had several games to settle.
+                if latest_week - return_week > config.RETURNING_ROLE_HISTORY_GAMES:
+                    continue
+                absence_games = [w for w in game_weeks if absence_start < w < return_week]
+                prospective = False
+            else:
+                absence_start = appearances[-1]
+                if latest_week - absence_start < config.RETURNING_ROLE_MIN_ABSENCE_WEEKS:
+                    continue
+                absence_games = [w for w in game_weeks if w > absence_start]
+                prospective = True
+
+            shared_games = appearances[-config.RETURNING_ROLE_HISTORY_GAMES:]
+            absence_games = absence_games[-config.RETURNING_ROLE_HISTORY_GAMES:]
+            if len(shared_games) < 2 or len(absence_games) < 2:
+                continue
+            returner_shares = [
+                player_weeks[(w, returner)] / team_total(w)
+                for w in shared_games if team_total(w) > 0
+            ]
+            returner_share = (
+                sum(returner_shares) / len(returner_shares) if returner_shares else 0.0
+            )
+            if returner_share < config.RETURNING_ROLE_MIN_SHARE:
+                continue
+
+            for teammate in available.get(role, {}).keys() - {returner}:
+                shared_appearances = sum(
+                    player_weeks.get((w, teammate), 0.0) > 0 for w in shared_games
+                )
+                absent_appearances = sum(
+                    player_weeks.get((w, teammate), 0.0) > 0 for w in absence_games
+                )
+                if shared_appearances < 2 or absent_appearances < 2:
+                    continue
+                shared_share = sum(
+                    player_weeks.get((w, teammate), 0.0) / team_total(w)
+                    for w in shared_games if team_total(w) > 0
+                ) / len(shared_games)
+                absent_share = sum(
+                    player_weeks.get((w, teammate), 0.0) / team_total(w)
+                    for w in absence_games if team_total(w) > 0
+                ) / len(absence_games)
+                penalty = compute_role_competition_penalty(
+                    shared_share,
+                    absent_share,
+                    returner_share,
+                    config.RETURNING_ROLE_MIN_SHARE_DROP,
+                    config.RETURNING_ROLE_MIN_SHARE,
+                    config.RETURNING_ROLE_POINTS_PER_SHARE,
+                    config.RETURNING_ROLE_MAX_PENALTY,
+                )
+                penalty *= availability
+                key = (team, pos, teammate)
+                if penalty > results.get(key, {}).get('penalty', 0.0):
+                    results[key] = {
+                        'penalty': penalty,
+                        'recent_share': shared_share,
+                        'earlier_share': absent_share,
+                        'returning_teammate': returner,
+                        'returning_teammate_share': returner_share,
+                        'games': min(shared_appearances, absent_appearances),
+                        'prospective': prospective,
+                    }
+    return results
 
 def compute_target_share_trend_map(week, recent_weeks=None, season=None):
     """Recent vs. earlier target share by (team, normalized player name)."""
@@ -238,11 +471,28 @@ def compute_upside_map(week, season=None):
         pct = float(pd.Series(vals).quantile(config.GPP_UPSIDE_PERCENTILE))
         ceiling = max(pct, avg)
 
+        # Keep the full-season tail as an anchor, but let the most recent
+        # appearances move it in either direction. Shrink the recent tail
+        # estimate because four games are still a small sample.
+        recent = records[-recent_games:]
+        earlier = records[:-recent_games]
+        if (len(recent) >= config.RECENT_FORM_MIN_GAMES
+                and len(earlier) >= config.RECENT_FORM_MIN_PRIOR_GAMES):
+            recent_scores = [score for _, score, _ in recent]
+            recent_avg = sum(recent_scores) / len(recent_scores)
+            recent_ceiling = max(
+                float(pd.Series(recent_scores).quantile(config.GPP_UPSIDE_PERCENTILE)),
+                recent_avg,
+            )
+            recent_reliability = len(recent_scores) / (
+                len(recent_scores) + config.RECENT_CEILING_PRIOR_GAMES
+            )
+            recent_weight = config.RECENT_CEILING_WEIGHT * recent_reliability
+            ceiling = (1 - recent_weight) * ceiling + recent_weight * recent_ceiling
+
         # A season-wide percentile can lag when a young player earns a larger
         # role late in the season. Let recent outcomes inform ceiling only when
         # target share confirms that the role itself has grown.
-        recent = records[-recent_games:]
-        earlier = records[:-recent_games]
         recent_shares = [share for _, _, share in recent if share is not None]
         earlier_shares = [share for _, _, share in earlier if share is not None]
         if len(recent_shares) >= 3 and len(earlier_shares) >= 2:
@@ -337,6 +587,56 @@ def compute_history(week, season=None):
             history[team] = round(sum(v * config.HISTORY_RECENCY_DECAY ** (week - wk) for wk, v in weeks.items())
                                   / sum(config.HISTORY_RECENCY_DECAY ** (week - wk) for wk in weeks), 3)
     return history
+
+
+def compute_recent_form_map(week, recent_games=None, season=None):
+    """Recent median scoring adjustment by normalized player name.
+
+    Uses game appearances (not calendar weeks) so bye weeks do not make the
+    recent sample stale. The adjustment is shrunk and capped in pure projection
+    math before it can affect a full-slate recommendation.
+    """
+    recent_games = recent_games or config.RECENT_FORM_GAMES
+    prior = prior_week_stats(week, season)
+    scores_by_player = defaultdict(list)
+    for row in prior.itertuples(index=False):
+        if row.position not in ('QB', 'RB', 'WR', 'TE'):
+            continue
+        name = normalize_player_name(row.player_display_name)
+        if not name:
+            continue
+        scores_by_player[name].append((
+            int(row.week), compute_fd_points(row._asdict(), row.position)
+        ))
+
+    result = {}
+    for name, records in scores_by_player.items():
+        records.sort(key=lambda item: item[0])
+        season_scores = [score for _, score in records]
+        recent_scores = season_scores[-recent_games:]
+        adjustment = compute_recent_form_adjustment(
+            recent_scores,
+            season_scores,
+            config.RECENT_FORM_WEIGHT,
+            config.RECENT_FORM_PRIOR_GAMES,
+            config.MAX_RECENT_FORM_ADJUSTMENT,
+            config.RECENT_FORM_MIN_GAMES,
+            config.RECENT_FORM_MIN_PRIOR_GAMES,
+        )
+        enough_history = (
+            len(recent_scores) >= config.RECENT_FORM_MIN_GAMES
+            and len(season_scores) - len(recent_scores)
+            >= config.RECENT_FORM_MIN_PRIOR_GAMES
+        )
+        if enough_history:
+            result[name] = {
+                'adjustment': adjustment,
+                'recent_median': round(float(pd.Series(recent_scores).median()), 3),
+                'season_median': round(float(pd.Series(season_scores).median()), 3),
+                'recent_games': len(recent_scores),
+                'total_games': len(season_scores),
+            }
+    return result
 
 
 def compute_qb_snap_share_map(week, season=None):
