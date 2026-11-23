@@ -249,7 +249,7 @@ BANNED_SINGLE = [
 ]
 
 LOCKED = [
-    # 'DeVonta Smith', 'Emmett Johnson', 'Dallas Cowboys'
+    'DeVonta Smith', 'Emmett Johnson', 'Dallas Cowboys'
     # 'Kaleb Johnson'
     # 'Jordan Love (MVP)', 'Konata Mumpfield', 'Blake Corum'
     #   'Kirk Cousins', 'Justin Jefferson'
