@@ -115,9 +115,8 @@ ROLE_TREND_MAX_BONUS = 1.0
 ROLE_CEILING_BONUS_WEIGHT = 1.0
 MAX_ROLE_CEILING_BONUS = 2.0
 # Classic full-slate winner-take-all contests favor right-tail outcomes. Keep
-# expected points in the mix, but lean more heavily on the 85th-percentile
-# ceiling; validate/tune this value with out-of-sample backtests.
-GPP_UPSIDE_WEIGHT = 0.65
+# a slight ceiling lean, while limiting the influence of noisy empirical tails.
+GPP_UPSIDE_WEIGHT = 0.55
 # Single-game projections retain an upside blend for diagnostics; the lineup
 # selector ranks legal builds by their role-adjusted aggregate ceiling.
 SHOWDOWN_UPSIDE_WEIGHT = 0.6
@@ -144,9 +143,8 @@ SINGLE_GAME_WR1_OVERRIDES = {
 # General names for the roster-level adjustment; initialized from the legacy
 # settings so existing weekly configuration continues to work.
 SAME_TEAM_WR_OVERLAP_PENALTY = SINGLE_GAME_SAME_TEAM_WR_PENALTY
-# On short full slates, allow an opposing WR and defense together; retain the
-# normal QB/RB/TE versus opposing-defense restriction.
-ALLOW_OPPOSING_WR_DST_STACK_MAX_GAMES = 4
+# Relax selected correlation restrictions on short full slates.
+SMALL_SLATE_STACK_RULES_MAX_GAMES = 4
 # Bonus when a team's starting QB is out. Full value to defenses/MVPs facing
 # the injured QB (backup-QB matchups are a strong DST edge); half to skill
 # players (game-script benefit); RBs get full when their OWN QB is out.
@@ -230,45 +228,24 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-     'Kyle Monangai', 'Josh Allen', 'Ty Johnson', "James Cook III"
+    # 'Minnesota Vikings'
+    # 'Jakobi Meyers', 'Nico Collins', 'Samaje Perine'
+    #  'Kyle Monangai', 'Josh Allen', 'Javonte Williams', 'Rome Odunze', 'Josh Downs', 'Travis Kelce', 'Ben Sinnott'
 ]
 BANNED_SINGLE = [
-    'Gavin Bartholomew', 'Jordan Watkins', 'Christian Watson (MVP)', 'Colby Parkinson', 'Matthew Golden (MVP)', 'Matthew Stafford (MVP)',
-    'Pierre Strong Jr.', 'Colby Parkinson (MVP)', 'Xavier Smith', 'Green Bay Packers (MVP)',
-    # 'Gavin Bartholomew',  'Christian McCaffrey (MVP)', 'Jordan Watkins', 'Kaelon Black', 'Mike Evans', 'T.J. Hockenson (MVP)', 'Kirk Cousins (MVP)',
-    # 'Zay Flowers (MVP)', 'Jacoby Brissett (MVP)', 'Tank Dell', 'Foster Moreau'
-    # 'Malachi Fields', 'Devin Singletary', 'Stefon Diggs', 'New York Giants (MVP)', 'Joe Burrow',
-    # 'Sean Tucker', 'Roschon Johnson', 'Tez Johnson', 'Jameis Winston', 'Jameis Winston (MVP)', 'Isaiah Likely (MVP)', 'Malik Nabers (MVP)'
-    # 'Stefon Diggs', 'Stefon Diggs (MVP)', 'Zay Flowers', 'Zay Flowers (MVP)'
-    # 'Jayden Daniels (MVP)',
-
-    # #   'Saquon Barkley (MVP)'
-#    'Rhamondre Stevenson',  'Jayden Daniels (MVP)'
-    # 'Eli Raridon'
-    # 'Malik Washington (MVP)', 'Hunter Henry', 'Rhamondre Stevenson',  'Rhamondre Stevenson (MVP)', 'Malik Willis (MVP)', 'Eli Raridon', 'Washington Commanders (MVP)'
+    'Pierre Strong Jr.', 'Christian Watson (MVP)', 'Colby Parkinson',
+    # 'Christian Watson (MVP)', 'Pierre Strong Jr.', 'Christian Watson', 'Xavier Smith', 'Tucker Kraft', 'J. Michael Sturdivant',  'Matthew Stafford (MVP)'
+    # 'Gavin Bartholomew', 'Jordan Watkins', 'Christian Watson (MVP)',  'Matthew Golden (MVP)', 'Matthew Stafford (MVP)',
+    # 'Colby Parkinson (MVP)',  'Green Bay Packers (MVP)', 'Blake Corum (MVP)', 'Pierre Strong Jr.', 'Christian Watson'
 ]
 
 LOCKED = [
-    'DeVonta Smith', 'Emmett Johnson', 'Dallas Cowboys'
-    # 'Kaleb Johnson'
-    # 'Jordan Love (MVP)', 'Konata Mumpfield', 'Blake Corum'
-    #   'Kirk Cousins', 'Justin Jefferson'
-    # 'Los Angeles Chargers', 'Jonah Coleman'
-    # 'C.J. Stroud (MVP)', 'Xavier Hutchinson', 'David Montgomery'
-    # 'Carolina Panthers', 'Emmett Johnson'
-    # 'Tyler Shough',
-    # 'Indianapolis Colts'
-    # 'Parker Washington'
-    # 'Jaylen Warren', 'Tony Pollard',' Chuba Hubbard',
-    # 'Drake Maye'
-    # 'Caleb Williams (MVP)', 'Cam Skattebo', 'Rachaad White'
-    # 'Tee Higgins',
-    # 'Jared Goff',
-    # 'New Orleans Saints',
-        # 'Christian McCaffrey',
-    # 'Isaiah Likely',
-    #   'Luther Burden III'
-    # 'Joe Burrow'#, 'Bijan Robinson', 'Kenneth Walker III', #, "Germie Bernard", "Makai Lemon", "Wan'Dale Robinson"
+    # 'Trey McBride'
+    # 'Joe Burrow (MVP)', 'Jayden Daniels', 'Chig Okonkwo', 'Emmett Johnson'
+    # 'Jordan Love (MVP)'
+    # 'Matthew Stafford', 'Trey Smack'
+
+    # 'Travis Kelce', 'Emmett Johnson'
 ]
 
 BLOCKED_TEAMS = []

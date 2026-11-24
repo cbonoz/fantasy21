@@ -72,7 +72,7 @@ class TestComputeUpsideMap:
 
         assert result['test kicker'] == pytest.approx(5.4)
 
-    def test_recent_ceiling_rises_only_when_target_share_confirms_role_growth(self, monkeypatch):
+    def test_recent_role_growth_does_not_bypass_ceiling_shrinkage(self, monkeypatch):
         rows = []
         for week in range(1, 8):
             rows.append({
@@ -87,9 +87,9 @@ class TestComputeUpsideMap:
 
         result = compute_upside_map(8)
 
-        # Recent four-game P85 (25.5) replaces the stale full-season P85 (21)
-        # because target share rose by more than the configured threshold.
-        assert result['role breakout'] == pytest.approx(25.5)
+        # Role changes are handled by the separate capped role bonus. The
+        # recent score tail remains shrunk rather than replacing season history.
+        assert result['role breakout'] == pytest.approx(22.5)
 
     def test_recent_scoring_spike_without_role_growth_modestly_raises_ceiling(self, monkeypatch):
         rows = []

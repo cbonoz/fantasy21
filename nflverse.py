@@ -435,30 +435,19 @@ def compute_giveaway_map(week, season=None):
 
 def compute_upside_map(week, season=None):
     """
-    Per-player upside: the configured high-percentile FanDuel score from prior weeks
-    (falling back to the average). Used to tilt projections toward ceiling in
-    GPP mode. Uses an interpolated percentile so a three- or four-game sample
-    cannot collapse to its single maximum game. Kept un-smoothed: ceilings of
-    genuine boom threats are rare and shrinking them toward a scrub-dominated
-    league mean would kill the signal.
+    Per-player upside: a shrinkage blend of the season and recent high-percentile
+    FanDuel scores (falling back to the average). Used to tilt projections
+    toward ceiling in GPP mode. Interpolated percentiles and sample-size
+    shrinkage keep short recent samples from collapsing to a single boom game.
     Returns {normalized_name: ceiling_points}.
     """
     prior = prior_week_stats(week, season)
     acc = defaultdict(list)
     for row in prior.itertuples(index=False):
         if row.position in OFFENSIVE_POSITIONS:
-            target_share = (
-                row._asdict().get('target_share')
-                if row.position in ('WR', 'TE', 'RB') else None
-            )
-            if pd.isna(target_share):
-                target_share = None
-            else:
-                target_share = float(target_share)
             acc[normalize_player_name(row.player_display_name)].append((
                 int(row.week),
                 compute_fd_points(row._asdict(), row.position),
-                target_share,
             ))
     upside = {}
     recent_games = config.UPSIDE_RECENT_GAMES
@@ -466,7 +455,7 @@ def compute_upside_map(week, season=None):
         if not records:
             continue
         records.sort(key=lambda item: item[0])
-        vals = [score for _, score, _ in records]
+        vals = [score for _, score in records]
         avg = sum(vals) / len(vals)
         pct = float(pd.Series(vals).quantile(config.GPP_UPSIDE_PERCENTILE))
         ceiling = max(pct, avg)
@@ -478,7 +467,7 @@ def compute_upside_map(week, season=None):
         earlier = records[:-recent_games]
         if (len(recent) >= config.RECENT_FORM_MIN_GAMES
                 and len(earlier) >= config.RECENT_FORM_MIN_PRIOR_GAMES):
-            recent_scores = [score for _, score, _ in recent]
+            recent_scores = [score for _, score in recent]
             recent_avg = sum(recent_scores) / len(recent_scores)
             recent_ceiling = max(
                 float(pd.Series(recent_scores).quantile(config.GPP_UPSIDE_PERCENTILE)),
@@ -489,22 +478,6 @@ def compute_upside_map(week, season=None):
             )
             recent_weight = config.RECENT_CEILING_WEIGHT * recent_reliability
             ceiling = (1 - recent_weight) * ceiling + recent_weight * recent_ceiling
-
-        # A season-wide percentile can lag when a young player earns a larger
-        # role late in the season. Let recent outcomes inform ceiling only when
-        # target share confirms that the role itself has grown.
-        recent_shares = [share for _, _, share in recent if share is not None]
-        earlier_shares = [share for _, _, share in earlier if share is not None]
-        if len(recent_shares) >= 3 and len(earlier_shares) >= 2:
-            recent_target_share = sum(recent_shares) / len(recent_shares)
-            earlier_target_share = sum(earlier_shares) / len(earlier_shares)
-            if (recent_target_share - earlier_target_share
-                    >= config.ROLE_TREND_MIN_TARGET_SHARE_DELTA):
-                recent_scores = [score for _, score, _ in recent]
-                recent_ceiling = float(pd.Series(recent_scores).quantile(
-                    config.GPP_UPSIDE_PERCENTILE
-                ))
-                ceiling = max(ceiling, recent_ceiling)
 
         upside[name] = round(ceiling, 3)
     return upside

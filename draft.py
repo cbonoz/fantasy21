@@ -15,6 +15,7 @@ from draftfast.settings import OptimizerSettings, CustomRule
 import fantasypros
 from fantasypros import build_projection_map as build_fp_projection_map
 from nfl_teams import NFL_TEAM_MAP, normalize_player_name, normalize_team_abbr
+from optimizer_rules import forbid_opposing_positions_with_defense
 import numpy as np
 import pandas as pd
 from odds import get_metabet_spread
@@ -1455,21 +1456,22 @@ def build_optimizer_settings(players, block_function):
             )
         )
 
-        # A defense scores when the opposing passing game fails, so starting it
-        # alongside that team's QB bets both sides of one outcome. draftfast
-        # ignores no_offense_against_defense for showdown, and a full
-        # no-opposing-offense rule is impossible here anyway: the 2-team minimum
-        # would force both sides onto every roster and ban every defense.
-        for d in (p for p in players if p.pos == 'D'):
-            opponent = get_opponent(d)
-            for q in players:
-                if q.team != opponent or base_position(q) != 'QB':
+        # Preserve the showdown QB/D restriction; opposing WR/D stacks remain
+        # eligible for the optimizer to choose.
+        for defense in (p for p in players if p.pos == 'D'):
+            opponent = get_opponent(defense)
+            for quarterback in players:
+                if quarterback.team != opponent or base_position(quarterback) != 'QB':
                     continue
-                base = q.name.replace(' (MVP)', '')
+                base_name = quarterback.name.replace(' (MVP)', '')
                 custom_rules.append(
                     CustomRule(
-                        group_a=lambda p, team=d.team: p.pos == 'D' and p.team == team,
-                        group_b=lambda p, base=base: p.name.replace(' (MVP)', '') == base,
+                        group_a=lambda p, team=defense.team: (
+                            p.pos == 'D' and p.team == team
+                        ),
+                        group_b=lambda p, name=base_name: (
+                            p.name.replace(' (MVP)', '') == name
+                        ),
                         comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
                     )
                 )
@@ -1492,49 +1494,48 @@ def build_optimizer_settings(players, block_function):
                     )
                 )
 
-    # Never pair a QB with an RB from the same team (diversifies the stack).
-    for team in set(p.team for p in players if p.pos in ('QB', 'RB')):
-        custom_rules.append(
-            CustomRule(
-                group_a=lambda p, team=team: p.pos == 'QB' and p.team == team,
-                group_b=lambda p, team=team: p.pos == 'RB' and p.team == team,
-                comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
-            )
-        )
-
-    # Never pair a WR with a TE from the same team.
-    for team in set(p.team for p in players if p.pos in ('WR', 'TE')):
-        custom_rules.append(
-            CustomRule(
-                group_a=lambda p, team=team: p.pos == 'WR' and p.team == team,
-                group_b=lambda p, team=team: p.pos == 'TE' and p.team == team,
-                comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
-            )
-        )
-
-    allow_opposing_wr_dst = (
-        SLATE_GAME_COUNT <= config.ALLOW_OPPOSING_WR_DST_STACK_MAX_GAMES
+    small_slate_stacks = (
+        SLATE_GAME_COUNT <= config.SMALL_SLATE_STACK_RULES_MAX_GAMES
     )
-    if allow_opposing_wr_dst:
-        # Short slates are more sensitive to correlation. Permit WR/DST
-        # combinations, but preserve the restriction for opposing QBs, RBs,
-        # and TEs.
-        for defense in (p for p in players if p.pos == 'D'):
-            opponent = get_opponent(defense)
+    if not small_slate_stacks:
+        # On larger slates, retain the anti-correlation heuristics. Short
+        # slates benefit from allowing same-team stacks for tournament upside.
+        for team in set(p.team for p in players if p.pos in ('QB', 'RB')):
             custom_rules.append(
                 CustomRule(
-                    group_a=lambda p, team=defense.team: p.pos == 'D' and p.team == team,
-                    group_b=lambda p, opponent=opponent: (
-                        p.team == opponent and p.pos in ('QB', 'RB', 'TE')
-                    ),
+                    group_a=lambda p, team=team: p.pos == 'QB' and p.team == team,
+                    group_b=lambda p, team=team: p.pos == 'RB' and p.team == team,
                     comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
                 )
             )
 
+        # Never pair a WR with a TE from the same team on larger slates.
+        for team in set(p.team for p in players if p.pos in ('WR', 'TE')):
+            custom_rules.append(
+                CustomRule(
+                    group_a=lambda p, team=team: p.pos == 'WR' and p.team == team,
+                    group_b=lambda p, team=team: p.pos == 'TE' and p.team == team,
+                    comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
+                )
+            )
+
+    # Let projections and the lineup objective decide whether an opposing
+    # receiver/defense pairing is worthwhile. Keep the other opponent-vs-DST
+    # exclusions; the comparison is conditional on selecting that defense.
+    for defense in (p for p in players if p.pos == 'D'):
+        custom_rules.append(
+            forbid_opposing_positions_with_defense(
+                defense.team,
+                get_opponent(defense),
+                ('QB', 'RB', 'TE', 'K'),
+                config.ROSTER_SIZE_CLASSIC,
+            )
+        )
+
     return OptimizerSettings(
         custom_rules=custom_rules,
         min_teams=3,
-        no_offense_against_defense=not allow_opposing_wr_dst,
+        no_offense_against_defense=False,
     )
 
 
