@@ -1520,14 +1520,14 @@ def build_optimizer_settings(players, block_function):
             )
 
     # Let projections and the lineup objective decide whether an opposing
-    # receiver/defense pairing is worthwhile. Keep the other opponent-vs-DST
-    # exclusions; the comparison is conditional on selecting that defense.
+    # skill player/defense pairing is worthwhile. Keep only the QB/DST
+    # restriction; the comparison is conditional on selecting that defense.
     for defense in (p for p in players if p.pos == 'D'):
         custom_rules.append(
             forbid_opposing_positions_with_defense(
                 defense.team,
                 get_opponent(defense),
-                ('QB', 'RB', 'TE', 'K'),
+                ('QB',),
                 config.ROSTER_SIZE_CLASSIC,
             )
         )

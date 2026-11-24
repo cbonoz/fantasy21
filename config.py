@@ -228,7 +228,7 @@ READD = [
 
 ]
 BANNED_CLASSIC = [
-    # 'Minnesota Vikings'
+    'Minnesota Vikings'
     # 'Jakobi Meyers', 'Nico Collins', 'Samaje Perine'
     #  'Kyle Monangai', 'Josh Allen', 'Javonte Williams', 'Rome Odunze', 'Josh Downs', 'Travis Kelce', 'Ben Sinnott'
 ]
@@ -240,7 +240,7 @@ BANNED_SINGLE = [
 ]
 
 LOCKED = [
-    # 'Trey McBride'
+    'Trey McBride', 'Washington Commanders'
     # 'Joe Burrow (MVP)', 'Jayden Daniels', 'Chig Okonkwo', 'Emmett Johnson'
     # 'Jordan Love (MVP)'
     # 'Matthew Stafford', 'Trey Smack'
