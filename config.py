@@ -238,32 +238,12 @@ ALLOW_PLAYERS = [
     'Mason Rudolph',
 ]
 BANNED_CLASSIC = [
-    'Minnesota Vikings', 'Justice Hill', 'Travis Kelce'
-    # 'Jakobi Meyers', 'Nico Collins', 'Samaje Perine'
-    #  'Kyle Monangai', 'Josh Allen', 'Javonte Williams', 'Rome Odunze', 'Josh Downs', 'Travis Kelce', 'Ben Sinnott'
 ]
 BANNED_SINGLE = [
-    'Christian Watson (MVP)', 'Tutu Atwell', 'Ronnie Rivers', 'Brandon McManus', 'Christian Watson',
-     'Pierre Strong Jr.',  'Xavier Smith', 'J. Michael Sturdivant', 'Matthew Golden (MVP)',
-       'Matthew Stafford (MVP)',  'Joshua Karty', 'Blake Corum', 'Aaron Rodgers',
-    # 'Gavin Bartholomew', 'Jordan Watkins', 'Christian Watson (MVP)',  'Matthew Golden (MVP)', 'Matthew Stafford (MVP)',
-    # 'Colby Parkinson (MVP)',  'Green Bay Packers (MVP)', 'Blake Corum (MVP)', 'Pierre Strong Jr.', 'Christian Watson'
 ]
 
 LOCKED = [
-     'Mason Rudolph', 'Tyler Higbee', 'Jordan Love (MVP)'
-    # 'Jordan Love (MVP)',
-    # 'Matthew Stafford',
-    # 'Kaleb Johnson',
-    # 'Jordan Love (MVP)',
-    # 'Joe Burrow',
-    # 'Trey McBride',
-    #  'Washington Commanders'
-    # 'Joe Burrow (MVP)', 'Jayden Daniels', 'Chig Okonkwo', 'Emmett Johnson'
-    # 'Jordan Love (MVP)'
-    # 'Matthew Stafford', 'Trey Smack'
-
-    # 'Travis Kelce', 'Emmett Johnson'
+     'Mason Rudolph',
 ]
 
 BLOCKED_TEAMS = []
