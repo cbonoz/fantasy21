@@ -15,7 +15,12 @@ from draftfast.settings import OptimizerSettings, CustomRule
 import fantasypros
 from fantasypros import build_projection_map as build_fp_projection_map
 from nfl_teams import NFL_TEAM_MAP, normalize_player_name, normalize_team_abbr
-from optimizer_rules import forbid_opposing_positions_with_defense
+from optimizer_rules import (
+    forbid_opposing_positions_with_defense,
+    is_player_override,
+    split_active_locks,
+    should_block_backup_qb,
+)
 import numpy as np
 import pandas as pd
 from odds import get_metabet_spread
@@ -34,6 +39,7 @@ from projection import (
     adjust_ceiling_for_weather,
     compute_kicker_total_bonus,
     compute_same_team_wr_overlap_penalty,
+    compute_same_team_wr_te_overlap_penalty,
     compute_team_totals,
     compute_wr_injury_bonus,
     qb_quality_multiplier,
@@ -95,7 +101,7 @@ def get_slate_week_from_file(filepath, season_start=config.SEASON_START):
 
 SALARY_FILE = (os.environ.get('SALARY_FILE') or
                f"{config.DATA_FOLDER}/{get_most_recently_created_file_with_extension(config.DATA_FOLDER, 'csv')}")
-WEEK = 12 # get_slate_week_from_file(SALARY_FILE) or max(get_week_relative_to_start(), 1)
+WEEK = get_slate_week_from_file(SALARY_FILE) or max(get_week_relative_to_start(), 1)
 ACTIVE_FILE = f"{config.ACTIVE_FOLDER}/data.csv"
 UPLOAD_FILE = f"{config.UPLOAD_FOLDER}/upload.csv"
 
@@ -105,6 +111,7 @@ MAX_SALARY = config.MAX_SALARY
 # Data-source resilience: every external pull records its status here and the
 # run degrades gracefully (missing data -> neutral), then reports what failed.
 DATA_STATUS = {}
+STALE_LOCK_WARNING_REPORTED = False
 
 
 def _record_source(name, ok, detail=''):
@@ -274,8 +281,9 @@ questionable_players = list(df[(~df['Injury Indicator'].isna()) | (~df['Injury D
 low_salary_players = list(df[((df['Salary'] < MIN_SALARY)) & (df['Position'] != 'D')]['Name'])
 excluded_players = set([*questionable_players, *low_salary_players])
 
-# Manual re-additions (weekly tuned)
-for p in config.READD:
+# Manual re-additions (weekly tuned). ALLOW_PLAYERS also bypasses automatic
+# eligibility filters later in the optimizer.
+for p in [*config.READD, *config.ALLOW_PLAYERS]:
     excluded_players.discard(p)
 
 questionable_df = df[df['Name'].isin(questionable_players)]
@@ -681,8 +689,13 @@ def filter_mvps(mvps, players, starter_map):
                     starter_injured = True
                     status = f"(Starter {starter_name} injured)"
 
-        is_starter = not starter_name or starter_name == base_name
+        manual_override = is_player_override(base_name, config.ALLOW_PLAYERS)
+        is_starter = (
+            not starter_name or starter_name == base_name or manual_override
+        )
         if is_starter or starter_injured:
+            if manual_override and starter_name != base_name:
+                status = "MANUAL PLAYER OVERRIDE"
             if name in config.BANNED_SINGLE:
                 status = f"BANNED / {status}"
             elif name in config.LOCKED:
@@ -1390,13 +1403,14 @@ constraints = LineupConstraints(locked=config.LOCKED, banned=BANNED)
 
 def block_function(p):
     store = p.kv_store
+    manual_override = is_player_override(p.name, config.ALLOW_PLAYERS)
     # A missing baseline plus failed projection sources must not be mistaken
     # for a cheap usable player, especially when solver constraints tighten.
     if not _has_projection(p.proj):
         return True
     played = int(float(store.get('Played') or 0))
     if SINGLE_GAME:
-        if played < MIN_PLAYED:
+        if played < MIN_PLAYED and not manual_override:
             return True
         # Block backup QBs (incl. MVP variants) whose starter is healthy.
         if base_position(p) == 'QB':
@@ -1409,20 +1423,32 @@ def block_function(p):
                 if config.USE_SNAP_BACKUP and not is_backup:
                     share = qb_snap_share_map.get((p.team, normalize_player_name(base_name)))
                     is_backup = share is not None and share < config.BACKUP_SNAP_THRESHOLD
-            if is_backup and not starter_injured:
+            if should_block_backup_qb(
+                    base_name, is_backup, starter_injured,
+                    config.ALLOW_PLAYERS):
                 return True
         return False
-    if p.team in BLOCKED_TEAMS:
+    if p.team in BLOCKED_TEAMS and not manual_override:
         return True
-    if p.pos == 'D' and p.cost > 5000:
+    if p.pos == 'D' and p.cost > 5000 and not manual_override:
         return True
-    if (p.pos == 'QB' and p.cost < MIN_QB_SALARY) or p.cost > MAX_SALARY:
+    if not manual_override and (
+            (p.pos == 'QB' and p.cost < MIN_QB_SALARY)
+            or p.cost > MAX_SALARY):
         return True
-    cost_filter = p.pos != 'QB' and (p.cost > MAX_SALARY or played < 1)
-    return (p.proj < 0 and p.pos != 'D') or (p.proj < 10 and p.pos == 'QB') or cost_filter
+    cost_filter = (
+        not manual_override
+        and p.pos != 'QB'
+        and (p.cost > MAX_SALARY or played < 1)
+    )
+    return (not manual_override) and (
+        (p.proj < 0 and p.pos != 'D')
+        or (p.proj < 10 and p.pos == 'QB')
+        or cost_filter
+    )
 
 
-def build_optimizer_settings(players, block_function):
+def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=False):
     """Custom rules: block players, and at most 1 per position per team."""
     custom_rules = [
         CustomRule(
@@ -1509,7 +1535,9 @@ def build_optimizer_settings(players, block_function):
                 )
             )
 
-        # Never pair a WR with a TE from the same team on larger slates.
+    if not small_slate_stacks or forbid_same_team_wr_te:
+        # Larger slates ban WR/TE stacks. On short slates this can also be
+        # enabled for the candidate search that estimates the no-pair build.
         for team in set(p.team for p in players if p.pos in ('WR', 'TE')):
             custom_rules.append(
                 CustomRule(
@@ -1539,19 +1567,20 @@ def build_optimizer_settings(players, block_function):
     )
 
 
-def optimize_lineup(players, score_by='proj', extra_locked=None, extra_banned=None):
+def optimize_lineup(players, score_by='proj', extra_locked=None, extra_banned=None,
+                    forbid_same_team_wr_te=False):
     """Run draftfast's weighted optimizer and return the optimal roster.
 
     score_by='ceiling' temporarily optimizes on each player's tournament
     ceiling instead of the blended projection. That is the direct WTA search.
     """
-    configured_locked = list(config.LOCKED)
-    if SINGLE_GAME:
-        active_names = {p.name for p in players}
-        stale_locks = [name for name in configured_locked if name not in active_names]
-        if stale_locks:
-            print(f"WARNING: ignoring out-of-slate showdown locks: {stale_locks}")
-        configured_locked = [name for name in configured_locked if name in active_names]
+    global STALE_LOCK_WARNING_REPORTED
+    configured_locked, stale_locks = split_active_locks(
+        config.LOCKED, (p.name for p in players)
+    )
+    if stale_locks and not STALE_LOCK_WARNING_REPORTED:
+        print(f"WARNING: ignoring out-of-slate locks: {stale_locks}")
+        STALE_LOCK_WARNING_REPORTED = True
     locked = list(dict.fromkeys(configured_locked + list(extra_locked or [])))
     banned = [
         name for name in dict.fromkeys(list(BANNED) + list(extra_banned or []))
@@ -1569,7 +1598,10 @@ def optimize_lineup(players, score_by='proj', extra_locked=None, extra_banned=No
             rule_set=ACTIVE_RULE_SET,
             player_pool=players,
             verbose=False,
-            optimizer_settings=build_optimizer_settings(players, block_function),
+            optimizer_settings=build_optimizer_settings(
+                players, block_function,
+                forbid_same_team_wr_te=forbid_same_team_wr_te,
+            ),
             constraints=active_constraints,
         )
     finally:
@@ -1598,19 +1630,111 @@ def same_team_wr_overlap_penalty(roster_players):
     )
 
 
+def same_team_wr_te_overlap_penalty(roster_players):
+    """Bounded target-share adjustment for short-slate WR/TE lineup pairs."""
+    if (SINGLE_GAME
+            or SLATE_GAME_COUNT > config.SMALL_SLATE_STACK_RULES_MAX_GAMES
+            or config.SAME_TEAM_WR_TE_TARGET_SHARE_WEIGHT <= 0
+            or config.MAX_SAME_TEAM_WR_TE_OVERLAP_PENALTY <= 0):
+        return 0.0
+    wrs_by_team = defaultdict(list)
+    tes_by_team = defaultdict(list)
+    for p in roster_players:
+        if p.pos == 'WR':
+            wrs_by_team[normalize_team_abbr(p.team)].append(p)
+        elif p.pos == 'TE':
+            tes_by_team[normalize_team_abbr(p.team)].append(p)
+    penalty = 0.0
+    for team in wrs_by_team.keys() & tes_by_team.keys():
+        for wr in wrs_by_team[team]:
+            wr_share = recent_target_share_map.get((
+                team, normalize_player_name(wr.name)
+            ))
+            for te in tes_by_team[team]:
+                te_share = recent_target_share_map.get((
+                    team, normalize_player_name(te.name)
+                ))
+                penalty += compute_same_team_wr_te_overlap_penalty(
+                    wr_share,
+                    te_share,
+                    config.SAME_TEAM_WR_TE_TARGET_SHARE_WEIGHT,
+                    config.MAX_SAME_TEAM_WR_TE_OVERLAP_PENALTY,
+                )
+    return penalty
+
+
 def get_score(roster):
     return (sum(p.proj for p in roster.players)
-            - same_team_wr_overlap_penalty(roster.players))
+            - same_team_wr_overlap_penalty(roster.players)
+            - same_team_wr_te_overlap_penalty(roster.players))
 
 
 def get_wta_score(roster):
     """Showdown selection score: sum each player's best available ceiling."""
     return (sum(p.kv_store.get('ceiling') or p.proj for p in roster.players)
-            - same_team_wr_overlap_penalty(roster.players))
+            - same_team_wr_overlap_penalty(roster.players)
+            - same_team_wr_te_overlap_penalty(roster.players))
 
 
 def _roster_key(roster):
     return tuple(sorted(p.name for p in roster.players))
+
+
+def optimize_short_slate_classic_lineup(players, extra_locked=None, extra_banned=None):
+    """Compare normal, no-pair, and forced-pair builds with overlap scoring."""
+    candidates = []
+    seen = set()
+
+    def add(roster):
+        if not roster:
+            return
+        key = _roster_key(roster)
+        if key not in seen:
+            seen.add(key)
+            candidates.append(roster)
+
+    add(optimize_lineup(
+        players, extra_locked=extra_locked, extra_banned=extra_banned
+    ))
+    # Include the best build that avoids all same-team WR/TE pairs.
+    add(optimize_lineup(
+        players,
+        extra_locked=extra_locked,
+        extra_banned=extra_banned,
+        forbid_same_team_wr_te=True,
+    ))
+
+    active_names = {p.name for p in players}
+    active_config_locks, _ = split_active_locks(config.LOCKED, active_names)
+    locked_names = set(active_config_locks) | (
+        set(extra_locked or []) & active_names
+    )
+    extra_banned_names = set(extra_banned or [])
+    banned_names = set(BANNED) | extra_banned_names
+    teams = defaultdict(lambda: {'WR': [], 'TE': []})
+    for p in players:
+        if (p.name in banned_names or block_function(p)
+                or p.pos not in ('WR', 'TE')):
+            continue
+        teams[normalize_team_abbr(p.team)][p.pos].append(p)
+
+    # Force each legal same-team pair once so the solver explores those
+    # combinations; the final selector then applies the target-share penalty.
+    for group in teams.values():
+        for wr, te in itertools.product(group['WR'], group['TE']):
+            pair = [wr.name, te.name]
+            if any(
+                name in banned_names and name not in locked_names
+                for name in pair
+            ):
+                continue
+            add(optimize_lineup(
+                players,
+                extra_locked=list(locked_names | set(pair)),
+                extra_banned=extra_banned,
+            ))
+
+    return max(candidates, key=get_score) if candidates else None
 
 
 class _EnumeratedRoster:
@@ -1922,6 +2046,12 @@ def print_optimized_roster(roster):
     wr_overlap_penalty = same_team_wr_overlap_penalty(roster.players)
     if wr_overlap_penalty > 0:
         print(f"same-team WR overlap adjustment = -{wr_overlap_penalty:.2f} on lineup totals")
+    wr_te_penalty = same_team_wr_te_overlap_penalty(roster.players)
+    if wr_te_penalty > 0:
+        print(
+            "same-team WR/TE target-competition adjustment = "
+            f"-{wr_te_penalty:.2f} on lineup totals"
+        )
     if no_ceiling:
         print(f"no ceiling history for: {', '.join(no_ceiling)} "
               f"(weighted proj = adjusted projection, no upside credit)")
@@ -2030,13 +2160,21 @@ print_data_status()
 # ============================================================
 
 NUM_LINEUPS = int(os.environ.get('NUM_LINEUPS') or (config.DEFAULT_SINGLE_LINEUPS if SINGLE_GAME else 0))
+SHORT_CLASSIC_SLATE = (
+    not SINGLE_GAME
+    and SLATE_GAME_COUNT <= config.SMALL_SLATE_STACK_RULES_MAX_GAMES
+)
 
 if SINGLE_GAME:
     # Exact search first: enumerate every legal showdown roster when the pool is
     # small, then fall back to solver/ceiling/diversification builds.
     rosters = generate_lineups(players, max(NUM_LINEUPS, 1))
 else:
-    roster = optimize_lineup(players)
+    roster = (
+        optimize_short_slate_classic_lineup(players)
+        if SHORT_CLASSIC_SLATE
+        else optimize_lineup(players)
+    )
     if not roster:
         rosters = []
     elif NUM_LINEUPS > 1:
@@ -2060,7 +2198,13 @@ else:
             if not removable:
                 break
             extra_banned.append(removable[0])
-            r = optimize_lineup(players, extra_banned=extra_banned)
+            r = (
+                optimize_short_slate_classic_lineup(
+                    players, extra_banned=extra_banned
+                )
+                if SHORT_CLASSIC_SLATE
+                else optimize_lineup(players, extra_banned=extra_banned)
+            )
             if not r:
                 break
             rosters.append(r)

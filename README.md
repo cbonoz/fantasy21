@@ -4,7 +4,7 @@ Weekly FanDuel NFL lineup optimizer. `draft.py` ingests the newest salary CSV fr
 
 ### Goal
 
-The target is **FanDuel tournament (GPP) upside**, especially the highest-scoring lineup in winner-take-all contests—not a cash-game lineup optimized for the safest median score. Full-slate projections include capped, shrinkage-adjusted recent scoring form and a recency-aware ceiling, then blend adjusted projections with the ceiling at `GPP_UPSIDE_WEIGHT`; single-game lineups use a stronger ceiling tilt. These are heuristics, not guarantees of tournament equity, and should be evaluated with out-of-sample backtests.
+The target is **FanDuel tournament (GPP) upside**, especially the highest-scoring lineup in winner-take-all contests—not a cash-game lineup optimized for the safest median score. Full-slate projections include capped, shrinkage-adjusted recent scoring form and a recency-aware ceiling, then blend adjusted projections with the ceiling at `GPP_UPSIDE_WEIGHT`; single-game lineups use a stronger ceiling tilt. On short classic slates, candidate lineups also receive a capped target-share overlap adjustment when a same-team WR and TE are both rostered. These are heuristics, not guarantees of tournament equity, and should be evaluated with out-of-sample backtests.
 
 ### To use:
 

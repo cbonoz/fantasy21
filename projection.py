@@ -466,6 +466,29 @@ def compute_same_team_wr_overlap_penalty(team_wr_counts, penalty_per_extra=2.0):
     return penalty
 
 
+def compute_same_team_wr_te_overlap_penalty(
+        wr_target_share, te_target_share, points_per_share=3.0,
+        max_penalty=1.0):
+    """Small lineup-level penalty for a WR/TE target-sharing pair.
+
+    Uses the smaller recent target share as the overlap signal, avoiding a
+    blanket projection discount when the usage data is unavailable.
+    """
+    wr_target_share = _finite_float(wr_target_share)
+    te_target_share = _finite_float(te_target_share)
+    points_per_share = _finite_float(points_per_share)
+    max_penalty = _finite_float(max_penalty)
+    if (wr_target_share is None or te_target_share is None
+            or points_per_share is None or max_penalty is None
+            or points_per_share <= 0 or max_penalty <= 0):
+        return 0.0
+    overlap_share = min(
+        max(wr_target_share, 0.0),
+        max(te_target_share, 0.0),
+    )
+    return min(overlap_share * points_per_share, max_penalty)
+
+
 def center_empirical_samples(samples, target_mean):
     """Shift an empirical sample to a current projection without changing shape."""
     target_mean = _finite_float(target_mean)
