@@ -18,6 +18,7 @@ from nfl_teams import NFL_TEAM_MAP, normalize_player_name, normalize_team_abbr
 from optimizer_rules import (
     forbid_opposing_positions_with_defense,
     is_player_override,
+    min_players_per_team_rule,
     split_active_locks,
     should_block_backup_qb,
     upload_slots,
@@ -42,6 +43,7 @@ from projection import (
     compute_team_totals,
     compute_wr_injury_bonus,
     qb_quality_multiplier,
+    scale_source_weight,
 )
 from nflverse import (
     compute_fpa_map,
@@ -389,6 +391,13 @@ except Exception as e:
 # FantasyPros projections (independent weekly projection source)
 # ============================================================
 
+if not config.FANTASYPROS_USE_API:
+    print("FantasyPros: HTML mode (API disabled; the free API is too limited)")
+elif os.environ.get('FANTASYPROS_API_KEY'):
+    print("FantasyPros API: enabled, key configured")
+else:
+    print("FantasyPros API: enabled but no key set; using the HTML page")
+
 fp_proj_map = {}
 fp_source_status = {
     'status': 'unavailable', 'requested_week': WEEK,
@@ -411,8 +420,8 @@ try:
         # blend fall back consistently across the remaining sources.
         print(
             f"WARNING: FantasyPros projections are '{fp_status}' (partial scrape); "
-            "excluding them so every player uses the same blend weights. "
-            "Set FANTASYPROS_API_KEY or fix the scraper to restore this source."
+            "excluding them because FANTASYPROS_ALLOW_DEGRADED is off. "
+            "Set FANTASYPROS_API_KEY or fix the scraper for full coverage."
         )
         fp_proj_map = {}
     _record_source(
@@ -420,11 +429,39 @@ try:
         bool(fp_proj_map) and fp_source_status.get('status') == 'ok',
         f"{len(fp_proj_map)} projections; {fp_source_status.get('detail', 'unknown source status')}",
     )
-    print(f"Loaded {len(fp_proj_map)} FantasyPros projections")
+    print(
+        f"Loaded {len(fp_proj_map)} FantasyPros projections "
+        f"({fp_source_status.get('method', 'unknown')})"
+    )
 except Exception as e:
     _record_source('FantasyPros', False, str(e))
     print('Error loading FantasyPros projections:', e)
     fp_proj_map = {}
+
+# FantasyPros' free API (and the public HTML page) return only the top ten
+# players per position, so coverage can be partial even when the fetch itself
+# succeeds. Scale the blend weight by the covered fraction either way so the
+# players it includes do not receive a full extra source the rest of the pool
+# never gets.
+PROJECTION_WEIGHTS = dict(config.PROJECTION_WEIGHTS)
+if fp_proj_map:
+    pool = df[df['Position'].isin(['QB', 'RB', 'WR', 'TE', 'K', 'D'])]
+    covered = 0
+    for row in pool.itertuples():
+        position = 'D' if row.Position == 'D' else row.Position
+        name = '' if position == 'D' else normalize_player_name(row.Name)
+        if fp_proj_map.get((row.Team, position, name)):
+            covered += 1
+    coverage = covered / len(pool) if len(pool) else 0.0
+    if coverage < 1 and config.FANTASYPROS_SCALE_WEIGHT_BY_COVERAGE:
+        PROJECTION_WEIGHTS['fantasypros'] = scale_source_weight(
+            PROJECTION_WEIGHTS.get('fantasypros'), coverage)
+    if coverage < 1:
+        print(
+            f"Partial FantasyPros source: {covered}/{len(pool)} players "
+            f"({coverage:.0%} coverage), blend weight "
+            f"{PROJECTION_WEIGHTS.get('fantasypros', 0):.2f}"
+        )
 
 # ============================================================
 # QB snap-share map (backup detection)
@@ -493,7 +530,7 @@ for _, qb in qb_candidates.iterrows():
         'nflverse_history': history,
         'sleeper': sleeper_qb,
         'fantasypros': fp_qb,
-    }, config.PROJECTION_WEIGHTS)
+    }, PROJECTION_WEIGHTS)
     snap_share = qb_snap_share_map.get((team, name))
     played = float(qb['Played']) if pd.notna(qb['Played']) else 0.0
     # Season appearances establish the likely primary; snap share and FPPG
@@ -801,7 +838,7 @@ def get_blended_projection(p, history_key):
         'nflverse_history': historic_averages.get(history_key),
         'sleeper': sleeper_projection_for(p),
         'fantasypros': fp_projection_for(p),
-    }, config.PROJECTION_WEIGHTS)
+    }, PROJECTION_WEIGHTS)
 
 
 def calculate_role_trend_adjustment(p):
@@ -1509,6 +1546,23 @@ def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=Fal
                 )
             )
 
+        # Require a floor from each team. A six-man showdown roster can
+        # otherwise be five or six players from one side. This is a user rule,
+        # not a correlation preference, so it survives heuristic relaxation.
+        min_per_team = max(int(config.SINGLE_GAME_MIN_PER_TEAM), 0)
+        if min_per_team:
+            for team in sorted({p.team for p in players}):
+                available = len({
+                    p.name.replace(' (MVP)', '')
+                    for p in players
+                    if p.team == team and not block_function(p)
+                })
+                required = min(min_per_team, available)
+                if required > 0:
+                    custom_rules.append(
+                        min_players_per_team_rule(team, required)
+                    )
+
         return OptimizerSettings(custom_rules=custom_rules, min_teams=2)
 
     # Non-single: at most 1 player per (position, team)
@@ -1858,6 +1912,19 @@ def enumerate_single_game_lineups(players, limit=None):
     min_mvp_cost = min(p.cost for p in mvp_pool)
     max_mvp_cost = max(p.cost for p in mvp_pool)
 
+    # Two-team showdown: enforce a floor from each side (a six-man roster can
+    # otherwise be 5-1 or 6-0). Cap the floor by what each team can supply.
+    min_per_team = max(int(config.SINGLE_GAME_MIN_PER_TEAM), 0)
+    required_per_team = {}
+    if min_per_team:
+        available_by_team = defaultdict(set)
+        for p in regular_pool + locked_regulars + mvp_pool:
+            available_by_team[p.team].add(base_name(p.name))
+        required_per_team = {
+            team: min(min_per_team, len(names))
+            for team, names in available_by_team.items()
+        }
+
     def search(max_qbs=2):
         """Enumerate legal rosters, optionally enforcing the soft heuristics."""
         found = []
@@ -1899,6 +1966,11 @@ def enumerate_single_game_lineups(players, limit=None):
                     continue
 
                 roster_players = parts + [m]
+                final_counts = dict(team_counts)
+                final_counts[m.team] = final_counts.get(m.team, 0) + 1
+                if any(final_counts.get(team, 0) < required
+                       for team, required in required_per_team.items()):
+                    continue
                 overlap_penalty = same_team_wr_overlap_penalty(roster_players)
                 wta = sum(p.kv_store.get('ceiling') or p.proj for p in roster_players) - overlap_penalty
                 proj = sum(p.proj for p in roster_players) - overlap_penalty
@@ -2198,7 +2270,10 @@ def record_optimizer_source_coverage():
             "nflverse history, and Sleeper"
         )
     elif fp_missing:
-        print(f"WARNING: FantasyPros missing current-week projections for {len(fp_missing)}/{len(eligible)} optimizer-eligible players")
+        print(
+            f"WARNING: FantasyPros covers {len(eligible) - len(fp_missing)}/"
+            f"{len(eligible)} optimizer-eligible players; using the partial source"
+        )
     if upside_matched < len(offensive_players):
         print(f"WARNING: historical ceiling unavailable for {len(offensive_players) - upside_matched}/{len(offensive_players)} optimizer-eligible offensive players")
 

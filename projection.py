@@ -339,6 +339,22 @@ def blend_available_projections(projections, weights):
     return weighted_total / available_weight if available_weight else 0.0
 
 
+def scale_source_weight(weight, coverage):
+    """Scale a partial source's blend weight by the fraction of the pool it covers.
+
+    A scrape that only covers the top of the pool should not carry a full
+    source weight, or the players it happens to include get an extra market
+    signal the rest of the pool does not.
+    """
+    weight = _finite_float(weight)
+    coverage = _finite_float(coverage)
+    if weight is None or weight <= 0:
+        return 0.0
+    if coverage is None:
+        return weight
+    return weight * min(max(coverage, 0.0), 1.0)
+
+
 def compute_role_trend_bonus(recent_share, earlier_share,
                              points_per_share=6.0, max_bonus=1.0):
     """Small capped point bonus for a sustained increase in target share."""

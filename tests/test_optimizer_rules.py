@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from optimizer_rules import (
     forbid_opposing_positions_with_defense,
     is_player_override,
+    min_players_per_team_rule,
     split_active_locks,
     should_block_backup_qb,
     upload_slots,
@@ -72,3 +73,18 @@ def test_single_game_upload_starts_with_mvp_and_has_six_slots():
     assert [name for name, _ in slots] == ['MVP'] + ['FLEX'] * 5
     assert 'MVP' in dict(slots)['MVP']
     assert {'QB', 'RB', 'WR', 'TE', 'K', 'D'} <= dict(slots)['FLEX']
+
+
+def test_min_players_per_team_rule_requires_a_floor():
+    rule = min_players_per_team_rule('DAL', 2)
+
+    assert not rule.comparison(sum, [1], [])
+    assert rule.comparison(sum, [1, 1], [])
+    assert rule.comparison(sum, [1, 1, 1], [])
+
+
+def test_min_players_per_team_rule_filters_by_team():
+    rule = min_players_per_team_rule('DAL', 2)
+
+    assert rule.group_a(SimpleNamespace(team='DAL'))
+    assert not rule.group_a(SimpleNamespace(team='PHI'))

@@ -17,6 +17,14 @@ FANTASYPROS_BASE = 'https://www.fantasypros.com/nfl/projections'
 FANTASYPROS_API_BASE = 'https://api.fantasypros.com/public/v2/json'
 POSITIONS = {'QB': 'qb', 'RB': 'rb', 'WR': 'wr', 'TE': 'te', 'K': 'k', 'DST': 'dst'}
 
+# The free API returns 10 players per position and appears to enforce a small
+# quota (a burst of ~10 rapid calls returned 403). Retry transient failures,
+# stop immediately on auth/quota/rate-limit responses, and space successful
+# requests by FANTASYPROS_API_REQUEST_DELAY_SECONDS.
+API_STOP_STATUSES = (401, 403, 429)
+API_RETRY_STATUSES = (429, 500, 502, 503, 504)
+API_ATTEMPTS = 2
+
 # Stat columns after the player cell (which embeds the team abbreviation).
 # 'fpts' is FantasyPros' own projection.
 POS_LAYOUT = {
@@ -55,7 +63,8 @@ def _status_cache_path(week):
     return f"{config.CACHE_FOLDER}/fantasypros_week_{week}.status.json"
 
 
-def _save_projection_status(week, status, source_week, detail, method='html'):
+def _save_projection_status(week, status, source_week, detail, method='html',
+                            api_fallback=False):
     global LAST_PROJECTION_STATUS
     LAST_PROJECTION_STATUS = {
         'status': status,
@@ -65,6 +74,11 @@ def _save_projection_status(week, status, source_week, detail, method='html'):
         'method': method,
         'updated_at': time.time(),
     }
+    if api_fallback:
+        # A configured key failed and the scrape covered this run. Remember it
+        # so the next run reuses the fallback cache instead of spending another
+        # API attempt and another scrape immediately.
+        LAST_PROJECTION_STATUS['api_fallback'] = True
     with open(_status_cache_path(week), 'w') as f:
         json.dump(LAST_PROJECTION_STATUS, f)
     return LAST_PROJECTION_STATUS
@@ -283,32 +297,95 @@ def _flatten_api_stats(raw_stats):
     return flattened
 
 
-def _fetch_api_projections(week, api_key):
-    """Fetch weekly stats from FantasyPros' authenticated JSON API."""
-    entries = []
-    diagnostics = []
-    for position in POSITIONS:
-        url = f"{FANTASYPROS_API_BASE}/nfl/{int(config.SEASON_START.split('/')[-1])}/projections"
+def _api_request(url, api_key, params):
+    """GET the FantasyPros API with bounded retries for transient failures.
+
+    Timeouts, connection errors, 429s, and 5xx responses are retried once.
+    Auth/quota responses (401/403) are returned immediately: retrying them
+    would only spend more of a small free-tier quota.
+    """
+    delay = 0.5
+    last_error = 'API request failed'
+    for attempt in range(1, API_ATTEMPTS + 1):
         try:
             response = requests.get(
                 url,
                 headers={'x-api-key': api_key, 'Accept': 'application/json'},
-                params={'position': position, 'week': week},
+                params=params,
                 timeout=30,
             )
         except requests.RequestException as exc:
-            diagnostics.append(f"{position}: API request error: {exc}")
+            last_error = f"API request error: {exc}"
+            if attempt < API_ATTEMPTS:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return None, last_error
+        if response.status_code in API_RETRY_STATUSES and attempt < API_ATTEMPTS:
+            retry_after = None
+            try:
+                retry_after = response.headers.get('Retry-After')
+            except AttributeError:
+                pass
+            try:
+                pause = float(retry_after) if retry_after else delay
+            except (TypeError, ValueError):
+                pause = delay
+            time.sleep(min(pause, 5.0))
+            delay *= 2
             continue
+        return response, None
+    return None, last_error
+
+
+def _api_pause():
+    """Space API calls to stay under the free tier's burst limiter."""
+    try:
+        delay = float(config.FANTASYPROS_API_REQUEST_DELAY_SECONDS)
+    except (TypeError, ValueError):
+        return
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _fetch_api_projections(week, api_key):
+    """Fetch weekly stats from FantasyPros' authenticated JSON API."""
+    entries = []
+    diagnostics = []
+    positions = list(POSITIONS)
+    for index, position in enumerate(positions):
+        url = f"{FANTASYPROS_API_BASE}/nfl/{int(config.SEASON_START.split('/')[-1])}/projections"
+        response, error = _api_request(
+            url, api_key, {'position': position, 'week': week}
+        )
+        if error:
+            diagnostics.append(f"{position}: {error}")
+            if index < len(positions) - 1:
+                _api_pause()
+            continue
+        if response.status_code in API_STOP_STATUSES:
+            # Never print the key. Stop the position loop rather than trying
+            # five more requests against the same quota/auth failure.
+            body = ' '.join((response.text or '').split())[:160]
+            diagnostics.append(
+                f"{position}: API HTTP {response.status_code}; "
+                f"stopping API attempt; {body}"
+            )
+            break
         if response.status_code != 200:
             # Never print the key. A short body helps distinguish auth, quota,
             # and endpoint errors without dumping a full response.
             body = ' '.join((response.text or '').split())[:160]
             diagnostics.append(f"{position}: API HTTP {response.status_code}; {body}")
+            if index < len(positions) - 1:
+                _api_pause()
             continue
         try:
             payload = response.json()
         except ValueError as exc:
             diagnostics.append(f"{position}: API returned invalid JSON ({exc})")
+            if index < len(positions) - 1:
+                _api_pause()
             continue
 
         for player in payload.get('players', []):
@@ -332,7 +409,33 @@ def _fetch_api_projections(week, api_key):
 
         if not payload.get('players'):
             diagnostics.append(f"{position}: API returned no players for week {week}")
+        if index < len(positions) - 1:
+            _api_pause()
     return entries, diagnostics
+
+
+def _html_request(url, params):
+    """GET a public projections page, retrying a transient failure once."""
+    delay = 0.5
+    last_error = 'request failed'
+    for attempt in (1, 2):
+        try:
+            response = requests.get(url, headers=HEADERS, params=params, timeout=30)
+        except requests.RequestException as exc:
+            last_error = f"request error: {exc}"
+            if attempt == 1:
+                time.sleep(delay)
+                continue
+            return None, last_error
+        if response.status_code >= 500 and attempt == 1:
+            last_error = (
+                f"HTTP {response.status_code} from "
+                f"{getattr(response, 'url', url)}"
+            )
+            time.sleep(delay)
+            continue
+        return response, None
+    return None, last_error
 
 
 def get_projections(week):
@@ -354,13 +457,19 @@ def get_projections(week):
 
     stale_cache = None
     stale_method = 'html'
-    api_key = os.environ.get('FANTASYPROS_API_KEY', '').strip()
+    api_key = ''
+    if config.FANTASYPROS_USE_API:
+        api_key = os.environ.get('FANTASYPROS_API_KEY', '').strip()
     force_refresh = os.environ.get('FANTASYPROS_FORCE_REFRESH', '').strip().lower() in ('1', 'true', 'yes')
     if os.path.isfile(cache_file):
         with open(cache_file) as f:
             cached = json.load(f)
         cached_status = _fresh_cached_status(week, cache_file, cached)
-        api_cache_mismatch = bool(api_key) and cached_status and cached_status.get('method') != 'api'
+        api_cache_mismatch = (
+            bool(api_key) and cached_status
+            and cached_status.get('method') != 'api'
+            and not cached_status.get('api_fallback')
+        )
         if cached_status and not force_refresh and not api_cache_mismatch:
             LAST_PROJECTION_STATUS = cached_status
             if not cached:
@@ -369,6 +478,33 @@ def get_projections(week):
                 return []
             print('return cached data', 'fantasypros', os.path.basename(cache_file),
                   cached_status.get('detail'))
+            return cached
+        # The short TTL only exists to pick up fairly fresh consensus updates.
+        # A current-week cache with real rows is good enough to avoid another
+        # scrape, which is the resilient choice against bot throttling.
+        if (config.FANTASYPROS_REUSE_CURRENT_WEEK_CACHE
+                and cached
+                and not force_refresh
+                and not api_cache_mismatch
+                and len(cached) >= config.FANTASYPROS_MIN_CACHED_ENTRIES):
+            status = dict(cached_status or {
+                'status': 'ok',
+                'requested_week': week,
+                'source_week': week,
+                'detail': 'current-week cache',
+                'method': 'html',
+                'updated_at': time.time(),
+            })
+            status['detail'] = (
+                (status.get('detail') or 'current-week cache')
+                + f"; reused current-week cache ({len(cached)} players)"
+            )
+            LAST_PROJECTION_STATUS = status
+            print(
+                'reusing current-week FantasyPros cache',
+                os.path.basename(cache_file), f"({len(cached)} players)",
+                status.get('detail'),
+            )
             return cached
         stale_cache = cached or None
         if cached_status:
@@ -381,24 +517,30 @@ def get_projections(week):
             print('stale or empty cache', os.path.basename(cache_file))
 
     method = 'api' if api_key else 'html'
+    entries = []
+    fetch_diagnostics = []
     if api_key:
         entries, fetch_diagnostics = _fetch_api_projections(week, api_key)
         for diagnostic in fetch_diagnostics:
             print('fantasypros API diagnostic:', diagnostic)
-    else:
-        entries = []
-        fetch_diagnostics = []
+
+    api_fallback = bool(api_key) and not entries
     body_diagnostic = None
-    if not api_key:
+    if not entries:
+        # No key configured, or the key failed (bad key, quota, endpoint
+        # change). The public projections page still works, so never let an
+        # optional key make the source unusable.
+        if api_key:
+            print('fantasypros API returned no projections; falling back to the HTML scrape')
+        method = 'html'
         for position, slug in POSITIONS.items():
             url = f"{FANTASYPROS_BASE}/{slug}.php"
             params = {'week': week} if week else None
             print('fetching data', url)
-            try:
-                resp = requests.get(url, headers=HEADERS, params=params, timeout=30)
-            except requests.RequestException as exc:
-                fetch_diagnostics.append(f"{position}: request error: {exc}")
-                print('fantasypros fetch failed', slug, exc)
+            resp, request_error = _html_request(url, params)
+            if request_error:
+                fetch_diagnostics.append(f"{position}: {request_error}")
+                print('fantasypros fetch failed', slug, request_error)
                 continue
             if resp.status_code != 200:
                 fetch_diagnostics.append(f"{position}: HTTP {resp.status_code} from {resp.url}")
@@ -432,7 +574,9 @@ def get_projections(week):
             json.dump(entries, f)
         if not fetch_diagnostics:
             detail = 'current-week fetch'
-            _save_projection_status(week, 'ok', week, detail, method)
+            _save_projection_status(
+                week, 'ok', week, detail, method, api_fallback=api_fallback
+            )
             print(f"Saved FantasyPros projections to {cache_file} ({len(entries)} players)")
         else:
             partial_detail = _summarize_fetch_diagnostics(
@@ -442,6 +586,7 @@ def get_projections(week):
                 week, 'degraded', week,
                 f"partial current-week fetch; {partial_detail}",
                 method,
+                api_fallback=api_fallback,
             )
             print(f"FantasyPros partial fetch: {len(entries)} players; {partial_detail}")
         return entries
@@ -451,7 +596,8 @@ def get_projections(week):
     if stale_cache:
         print(f"fantasypros refresh failed; returning stale current-week cache {os.path.basename(cache_file)}")
         _save_projection_status(
-            week, 'degraded', week, 'stale current-week cache after refresh failure', stale_method
+            week, 'degraded', week, 'stale current-week cache after refresh failure',
+            stale_method, api_fallback=bool(api_key),
         )
         return stale_cache
 
@@ -470,7 +616,9 @@ def get_projections(week):
     detail = f"current-week scrape unavailable; {diagnostic_summary}"
     if previous_week_available:
         detail += f"; week {week - 1} cache exists but is not used"
-    _save_projection_status(week, 'unavailable', None, detail, method)
+    _save_projection_status(
+        week, 'unavailable', None, detail, method, api_fallback=bool(api_key)
+    )
     print(f"fantasypros week {week} returned no current-week players; {detail}")
     return []
 

@@ -8,6 +8,41 @@
 import os
 import time
 
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE = os.path.join(PROJECT_ROOT, '.env')
+
+
+def load_env_file(path=None, environ=None):
+    """Load KEY=VALUE pairs from a .env file without overriding real env vars.
+
+    `.env` is git-ignored; `.env.example` is the template. Copy it and fill in
+    FANTASYPROS_API_KEY. Values already present in the environment win, so CI
+    or a shell export takes precedence over the file.
+    """
+    path = path or ENV_FILE
+    target = os.environ if environ is None else environ
+    loaded = {}
+    if not os.path.isfile(path):
+        return loaded
+    with open(path) as handle:
+        for raw in handle:
+            line = raw.strip()
+            if line.startswith('export '):
+                line = line[len('export '):].strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if not key or key in target:
+                continue
+            target[key] = value
+            loaded[key] = value
+    return loaded
+
+
+load_env_file()
+
 DATA_FOLDER = './data26'
 ACTIVE_FOLDER = './active'
 UPLOAD_FOLDER = './upload'
@@ -22,11 +57,26 @@ ODDS_CACHE_MAX_AGE_MINUTES = 60
 SLEEPER_CACHE_MAX_AGE_HOURS = 6
 FANTASYPROS_CACHE_MAX_AGE_HOURS = 6
 FANTASYPROS_FAILURE_CACHE_HOURS = 2
-# A partial (degraded) scrape can cover only a subset of the slate, which would
-# give a 35%-weight weekly source to some players and not others. Exclude a
-# non-ok source entirely so every player is blended with the same weights; set
-# True only when you have checked that partial coverage is acceptable.
-FANTASYPROS_ALLOW_DEGRADED = False
+# The free API returns only ten rows per position and enforces a very small
+# daily quota, so the HTML projections page is the primary source. Set True
+# only with a paid/higher-tier key.
+FANTASYPROS_USE_API = False
+# A current-week cache with real rows is reused after the short TTL expires:
+# the ten-per-position consensus rarely changes intraday and re-scraping risks
+# bot throttling. Force a refresh with FANTASYPROS_FORCE_REFRESH=1.
+FANTASYPROS_REUSE_CURRENT_WEEK_CACHE = True
+FANTASYPROS_MIN_CACHED_ENTRIES = 30
+# Space FantasyPros API requests to stay under the free tier's burst limiter
+# (a rapid burst of ~10 calls returned 403). Only used on a cache miss; a full
+# refresh makes one request per position.
+FANTASYPROS_API_REQUEST_DELAY_SECONDS = 1.0
+# A partial (degraded) scrape can cover only part of the slate. Use the rows it
+# has instead of dropping the source entirely, but scale its blend weight by the
+# fraction of the pool it covers so a 20%-complete source cannot carry a full
+# 35% weight for the players it happens to include. Set ALLOW to False to
+# exclude partial data completely.
+FANTASYPROS_ALLOW_DEGRADED = True
+FANTASYPROS_SCALE_WEIGHT_BY_COVERAGE = True
 
 
 def cache_is_fresh(path):
@@ -60,6 +110,10 @@ ROSTER_SIZE_SINGLE = 6
 TOP_N_DISPLAY = 10
 # Show a few more DSTs so low-cost ceiling plays aren't hidden just below top 10.
 TOP_N_DEFENSE_DISPLAY = 15
+
+# Single-game rosters are two-team; require this many players from each side so
+# a six-man build cannot be 5-1 or 6-0.
+SINGLE_GAME_MIN_PER_TEAM = 2
 
 # ============================================================
 # Projection weights
@@ -269,7 +323,7 @@ ALLOW_PLAYERS = [
 
 # These lists are generally ad-hoc and can be ignored by AI updates generally
 BANNED_CLASSIC = [
-    'DeVonta Smith','Kyle Monangai', 'CeeDee Lamb', 'Kansas City Chiefs'
+    'DeVonta Smith','Kyle Monangai', 'Kansas City Chiefs', 'Jared Goff', 'Dallas Cowboys', 'Buffalo Bills', 'Detroit Lions', 'CeeDee Lamb'
     # 'DeVonta Smith', 'Kyle Monangai', 'Kansas City Chiefs', 'Detroit Lions', 'Jared Goff', 'Buffalo Bills', 'George Pickens'
 ]
 
@@ -280,9 +334,8 @@ BANNED_SINGLE = [
 ]
 
 LOCKED = [
-
+    # 'Saquon Barkley'
     # 'Emmett Johnson (MVP)', 'James Cook III', 'Ty Johnson', 'George Pickens',
-    'Saquon Barkley',
     #  'Buffalo Bills'
     # 'Chicago Bears',
     # 'Sam LaPorta',

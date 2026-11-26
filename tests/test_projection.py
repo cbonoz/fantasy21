@@ -27,6 +27,7 @@ from projection import (
     compute_team_totals,
     compute_wr_injury_bonus,
     qb_quality_multiplier,
+    scale_source_weight,
 )
 
 
@@ -440,3 +441,20 @@ class TestComputeFpProjection:
     def test_lost_fumble_is_two_points(self):
         assert compute_fp_projection('WR', {'fl': 1}) == -2.0
         assert compute_fp_projection('TE', {'fl': 1}) == -2.0
+
+
+class TestScaleSourceWeight:
+    def test_partial_coverage_scales_the_weight(self):
+        assert scale_source_weight(0.35, 0.25) == pytest.approx(0.0875)
+
+    def test_full_coverage_keeps_the_weight(self):
+        assert scale_source_weight(0.35, 1.0) == pytest.approx(0.35)
+        assert scale_source_weight(0.35, 2.0) == pytest.approx(0.35)
+
+    def test_missing_coverage_keeps_the_weight(self):
+        assert scale_source_weight(0.35, None) == pytest.approx(0.35)
+
+    def test_invalid_inputs_are_safe(self):
+        assert scale_source_weight(None, 0.5) == 0.0
+        assert scale_source_weight(0, 0.5) == 0.0
+        assert scale_source_weight(0.35, -1) == 0.0

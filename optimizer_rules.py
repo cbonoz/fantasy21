@@ -35,6 +35,20 @@ def is_player_override(player_name, allowed_players):
     return base_name in set(allowed_players)
 
 
+def min_players_per_team_rule(team, minimum):
+    """Require at least `minimum` roster spots from one team.
+
+    Single-game rosters are two-team, and a 6-man build can otherwise stack
+    five or six players from one side. This is a lineup-construction rule, not
+    a correlation heuristic, so it is never relaxed by the fallback search.
+    """
+    return CustomRule(
+        group_a=lambda p, team=team: p.team == team,
+        group_b=lambda p: False,
+        comparison=lambda sum, a, b, minimum=minimum: sum(a) + sum(b) >= minimum,
+    )
+
+
 def upload_slots(single_game):
     """FanDuel upload columns and the roster positions each one accepts.
 
