@@ -11,9 +11,7 @@ from datetime import datetime
 import config
 from nfl_teams import NFL_TEAM_MAP, normalize_team_abbr
 from projection import (
-    calculate_precipitation_factor,
-    calculate_temperature_factor,
-    calculate_wind_factor,
+    combined_weather_factor,
 )
 
 team_name_to_abbr = {
@@ -442,9 +440,10 @@ def display_weather_summary(weather_df):
         roofed = home_abbr in config.ROOFED_TEAMS
         parts = []
         for pos, label in (('QB', 'QB'), ('WR', 'WR'), ('TE', 'TE'), ('RB', 'RB'), ('D', 'D'), ('K', 'K')):
-            factor = (calculate_wind_factor(info['wind'], pos)
-                      * calculate_temperature_factor(info['temp'], pos)
-                      * calculate_precipitation_factor(info['precip'], pos))
+            factor = combined_weather_factor(
+                info['wind'], info['temp'], info['precip'], pos,
+                config.WEATHER_MAX_ADJUSTMENT.get(pos),
+            )
             if factor >= 1.02:
                 parts.append(f"{label}↑")
             elif factor <= 0.98:

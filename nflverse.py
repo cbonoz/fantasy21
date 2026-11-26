@@ -21,6 +21,12 @@ NFLVERSE_BASE = 'https://github.com/nflverse/nflverse-data/releases/download'
 OFFENSIVE_POSITIONS = ('QB', 'RB', 'WR', 'TE', 'K')
 DEFENSIVE_GROUPS = ('DL', 'LB', 'DB')
 
+# The analysis helpers each call prior_week_stats(), which would otherwise
+# re-parse the same multi-MB season CSV several times per run. Memoize per
+# file path and mtime so a mid-run refresh still invalidates the entry.
+_WEEKLY_STATS_MEMO = {}
+_SNAP_COUNTS_MEMO = {}
+
 
 def _season():
     return int(config.SEASON_START.split('/')[-1])
@@ -34,15 +40,22 @@ def get_weekly_player_stats(week, season=None):
     """Weekly player stats for the season, cached per week."""
     season = season or _season()
     cache_file = _cache_path('nflverse', week)
+    memo_key = os.path.abspath(cache_file)
+    cached = _WEEKLY_STATS_MEMO.get(memo_key)
+    if (cached and os.path.isfile(cache_file)
+            and cached[0] == os.path.getmtime(cache_file)):
+        return cached[1]
     if config.cache_is_fresh(cache_file):
         print('return cached data', f"nflverse week {week}")
-        return pd.read_csv(cache_file, low_memory=False)
-    if os.path.isfile(cache_file):
-        print('stale cache; refreshing', f"nflverse week {week}")
-    url = f"{NFLVERSE_BASE}/stats_player/stats_player_week_{season}.csv"
-    print('fetching data', url)
-    df = pd.read_csv(url, low_memory=False)
-    df.to_csv(cache_file, index=False)
+        df = pd.read_csv(cache_file, low_memory=False)
+    else:
+        if os.path.isfile(cache_file):
+            print('stale cache; refreshing', f"nflverse week {week}")
+        url = f"{NFLVERSE_BASE}/stats_player/stats_player_week_{season}.csv"
+        print('fetching data', url)
+        df = pd.read_csv(url, low_memory=False)
+        df.to_csv(cache_file, index=False)
+    _WEEKLY_STATS_MEMO[memo_key] = (os.path.getmtime(cache_file), df)
     return df
 
 
@@ -50,15 +63,22 @@ def get_snap_counts(week, season=None):
     """Season snap counts, cached per week."""
     season = season or _season()
     cache_file = _cache_path('snap_counts', week)
+    memo_key = os.path.abspath(cache_file)
+    cached = _SNAP_COUNTS_MEMO.get(memo_key)
+    if (cached and os.path.isfile(cache_file)
+            and cached[0] == os.path.getmtime(cache_file)):
+        return cached[1]
     if config.cache_is_fresh(cache_file):
         print('return cached data', f"snap counts week {week}")
-        return pd.read_csv(cache_file)
-    if os.path.isfile(cache_file):
-        print('stale cache; refreshing', f"snap counts week {week}")
-    url = f"{NFLVERSE_BASE}/snap_counts/snap_counts_{season}.csv"
-    print('fetching data', url)
-    df = pd.read_csv(url)
-    df.to_csv(cache_file, index=False)
+        df = pd.read_csv(cache_file)
+    else:
+        if os.path.isfile(cache_file):
+            print('stale cache; refreshing', f"snap counts week {week}")
+        url = f"{NFLVERSE_BASE}/snap_counts/snap_counts_{season}.csv"
+        print('fetching data', url)
+        df = pd.read_csv(url)
+        df.to_csv(cache_file, index=False)
+    _SNAP_COUNTS_MEMO[memo_key] = (os.path.getmtime(cache_file), df)
     return df
 
 
@@ -354,9 +374,17 @@ def compute_fpa_map(week, season=None):
     Summing per game (instead of averaging per player) avoids diluting a
     matchup when teams rotate multiple players at a position.
 
+    Each team's rate is then shrunk toward that position's league average
+    (`FPA_SHRINKAGE_GAMES`), so a single blow-up game cannot dominate a matchup
+    signal built from a small, high-variance sample.
+
     Returns {defense_team: {position: avg_fd_points_allowed_per_game}}.
     """
-    cache_file = f"{config.CACHE_FOLDER}/fpa_week_{week}.json"
+    # Versioned filename: a change to the shrinkage method must not reuse a
+    # cache produced by the previous method.
+    cache_file = (
+        f"{config.CACHE_FOLDER}/fpa_week_{week}_v{config.FPA_CACHE_VERSION}.json"
+    )
     if config.cache_is_fresh(cache_file):
         print('return cached data', f"fpa week {week}")
         with open(cache_file) as f:
@@ -380,6 +408,36 @@ def compute_fpa_map(week, season=None):
     result = {}
     for team, positions in fpa.items():
         result[team] = {pos: round(sum(v) / len(v), 3) for pos, v in positions.items() if v}
+
+    # Pooled league average per position (points per game, not per team) is the
+    # shrinkage target: it weights every observed game equally.
+    pooled_totals = defaultdict(float)
+    pooled_games = defaultdict(int)
+    for positions in fpa.values():
+        for pos, values in positions.items():
+            pooled_totals[pos] += sum(values)
+            pooled_games[pos] += len(values)
+    try:
+        shrink_games = max(float(config.FPA_SHRINKAGE_GAMES), 0.0)
+    except (TypeError, ValueError):
+        shrink_games = 0.0
+    if shrink_games > 0:
+        shrunk = {}
+        for team, positions in result.items():
+            shrunk[team] = {}
+            for pos, value in positions.items():
+                games = pooled_games[pos]
+                if games <= 0:
+                    shrunk[team][pos] = value
+                    continue
+                league_average = pooled_totals[pos] / games
+                sample = len(fpa[team][pos])
+                shrunk[team][pos] = round(
+                    (value * sample + league_average * shrink_games)
+                    / (sample + shrink_games),
+                    3,
+                )
+        result = shrunk
 
     with open(cache_file, 'w') as f:
         json.dump(result, f)

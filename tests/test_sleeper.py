@@ -3,6 +3,9 @@ import pytest
 from nfl_teams import normalize_player_name
 import sleeper
 from sleeper import build_projection_map
+import json
+import os
+import time
 
 
 def _projections():
@@ -78,3 +81,52 @@ class TestBuildProjectionMap:
         result = build_projection_map(9)
 
         assert result[('CHI', 'WR', 'luther burden')] == pytest.approx(10.5)
+
+
+class TestProjectionFreshness:
+    def test_fresh_cache_is_returned_without_fetch(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sleeper.config, 'CACHE_FOLDER', str(tmp_path))
+        payload = _projections()
+        with open(f"{tmp_path}/sleeper_week_12.json", 'w') as f:
+            json.dump(payload, f)
+
+        def fail_fetch(*args, **kwargs):
+            raise AssertionError('fresh cache should not refetch')
+
+        monkeypatch.setattr(sleeper.requests, 'get', fail_fetch)
+        assert sleeper.get_projections(12) == payload
+
+    def test_stale_cache_survives_a_failed_refresh(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sleeper.config, 'CACHE_FOLDER', str(tmp_path))
+        payload = _projections()
+        path = f"{tmp_path}/sleeper_week_12.json"
+        with open(path, 'w') as f:
+            json.dump(payload, f)
+        old = time.time() - 12 * 60 * 60
+        os.utime(path, (old, old))
+
+        def fail_fetch(*args, **kwargs):
+            raise RuntimeError('network down')
+
+        monkeypatch.setattr(sleeper.requests, 'get', fail_fetch)
+        assert sleeper.get_projections(12) == payload
+
+    def test_cache_older_than_ttl_triggers_a_fetch(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sleeper.config, 'CACHE_FOLDER', str(tmp_path))
+        path = f"{tmp_path}/sleeper_week_12.json"
+        with open(path, 'w') as f:
+            json.dump([], f)
+        old = time.time() - (sleeper.config.SLEEPER_CACHE_MAX_AGE_HOURS + 1) * 3600
+        os.utime(path, (old, old))
+
+        calls = []
+
+        class Resp:
+            def json(self):
+                return _projections()
+
+        monkeypatch.setattr(
+            sleeper.requests, 'get', lambda *a, **k: calls.append(1) or Resp()
+        )
+        assert sleeper.get_projections(12) == _projections()
+        assert calls

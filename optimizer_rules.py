@@ -35,6 +35,31 @@ def is_player_override(player_name, allowed_players):
     return base_name in set(allowed_players)
 
 
+def upload_slots(single_game):
+    """FanDuel upload columns and the roster positions each one accepts.
+
+    Classic FLEX is RB/WR/TE -- omitting TE left a two-TE lineup with an
+    unfilled slot and shifted the defense into the FLEX column. A single-game
+    file puts the MVP first and fills the remaining five AnyFLEX slots.
+    """
+    if single_game:
+        return [('MVP', {'MVP'})] + [
+            ('FLEX', {'QB', 'RB', 'WR', 'TE', 'K', 'D'})
+            for _ in range(5)
+        ]
+    return [
+        ('QB', {'QB'}),
+        ('RB', {'RB'}),
+        ('RB', {'RB'}),
+        ('WR', {'WR'}),
+        ('WR', {'WR'}),
+        ('WR', {'WR'}),
+        ('TE', {'TE'}),
+        ('FLEX', {'RB', 'WR', 'TE'}),
+        ('DEF', {'D'}),
+    ]
+
+
 def should_block_backup_qb(player_name, is_backup, starter_injured,
                            allowed_players):
     """Keep healthy backups out unless manually included in the allow list."""

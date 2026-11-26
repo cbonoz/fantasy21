@@ -5,6 +5,7 @@ from optimizer_rules import (
     is_player_override,
     split_active_locks,
     should_block_backup_qb,
+    upload_slots,
 )
 
 
@@ -54,3 +55,20 @@ def test_split_active_locks_preserves_order_and_ignores_stale_names():
     )
     assert active == ['Travis Kelce']
     assert stale == ['Mason Rudolph']
+
+
+
+def test_classic_upload_flex_accepts_a_second_te():
+    slots = upload_slots(single_game=False)
+    assert [name for name, _ in slots] == [
+        'QB', 'RB', 'RB', 'WR', 'WR', 'WR', 'TE', 'FLEX', 'DEF'
+    ]
+    flex = dict(slots)['FLEX']
+    assert 'TE' in flex and 'RB' in flex and 'WR' in flex
+
+
+def test_single_game_upload_starts_with_mvp_and_has_six_slots():
+    slots = upload_slots(single_game=True)
+    assert [name for name, _ in slots] == ['MVP'] + ['FLEX'] * 5
+    assert 'MVP' in dict(slots)['MVP']
+    assert {'QB', 'RB', 'WR', 'TE', 'K', 'D'} <= dict(slots)['FLEX']

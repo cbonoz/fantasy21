@@ -41,6 +41,35 @@ class TestComputeFpaMap:
         # Per-game average = (3.0 + 16.0) / 2 = 9.5. Backup TEs must not dilute it.
         assert result['A']['TE'] == pytest.approx(9.5)
 
+    def test_extreme_small_sample_is_shrunk_toward_league_average(
+            self, monkeypatch, tmp_path):
+        rows = [
+            # Team A's defense: one huge TE game, one quiet game.
+            (1, 'B', 'A', 'TE', 'T1', 0, 200, 1, 0, 0, 0, 0, 0, 0),   # 26.0
+            (2, 'C', 'A', 'TE', 'T2', 0, 10, 0, 0, 0, 0, 0, 0, 0),    # 1.0
+        ]
+        # Team B's defense: a steady eight-game sample.
+        rows += [
+            (week, 'D', 'B', 'TE', 'T3', 0, 40, 0, 0, 0, 0, 0, 0, 0)
+            for week in range(1, 9)                                   # 4.0 each
+        ]
+        df = pd.DataFrame(rows, columns=_df().columns)
+        monkeypatch.setattr(nflverse, 'prior_week_stats', lambda week, season=None: df)
+        monkeypatch.setattr(nflverse.config, 'CACHE_FOLDER', str(tmp_path))
+        monkeypatch.setattr(nflverse.config, 'FPA_SHRINKAGE_GAMES', 4.0)
+
+        result = compute_fpa_map(9)
+
+        # Pooled league average = (26 + 1 + 8*4) / 10 games = 5.9.
+        # The two-game extreme is pulled down toward it; the steady eight-game
+        # sample is pulled up only slightly.
+        assert result['A']['TE'] == pytest.approx(
+            (13.5 * 2 + 5.9 * 4) / 6, abs=0.01)
+        assert result['A']['TE'] < 13.5
+        assert result['B']['TE'] == pytest.approx(
+            (4.0 * 8 + 5.9 * 4) / 12, abs=0.01)
+        assert result['B']['TE'] > 4.0
+
 
 class TestComputeUpsideMap:
     def test_small_sample_does_not_collapse_to_max(self, monkeypatch):
@@ -366,3 +395,50 @@ class TestComputeDefenseUpsideMap:
         # P85 is 8.8 and the mean is 6.0; points-allowed baseline is not
         # reconstructed from incomplete player-level defensive stats.
         assert result['det'] == pytest.approx(2.8)
+
+
+class TestInProcessCache:
+    def test_weekly_stats_are_parsed_once_per_file_version(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(nflverse.config, 'CACHE_FOLDER', str(tmp_path))
+        nflverse._WEEKLY_STATS_MEMO.clear()
+        path = f"{tmp_path}/nflverse_week_12.csv"
+        pd.DataFrame([{'week': 1, 'player_display_name': 'Test Player'}]).to_csv(
+            path, index=False)
+
+        reads = []
+        real_read = pd.read_csv
+
+        def counting_read(*args, **kwargs):
+            reads.append(args[0])
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(nflverse.pd, 'read_csv', counting_read)
+        first = nflverse.get_weekly_player_stats(12)
+        second = nflverse.get_weekly_player_stats(12)
+
+        assert len(reads) == 1, 'repeat calls should reuse the parsed frame'
+        assert first.equals(second)
+
+        # A rewritten cache file (new mtime) must invalidate the memo.
+        newer = __import__('time').time() + 5
+        __import__('os').utime(path, (newer, newer))
+        nflverse.get_weekly_player_stats(12)
+        assert len(reads) == 2
+
+    def test_snap_counts_are_parsed_once(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(nflverse.config, 'CACHE_FOLDER', str(tmp_path))
+        nflverse._SNAP_COUNTS_MEMO.clear()
+        pd.DataFrame([{'week': 1, 'player': 'Test'}]).to_csv(
+            f"{tmp_path}/snap_counts_week_12.csv", index=False)
+
+        reads = []
+        real_read = pd.read_csv
+
+        def counting_read(*args, **kwargs):
+            reads.append(args[0])
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(nflverse.pd, 'read_csv', counting_read)
+        nflverse.get_snap_counts(12)
+        nflverse.get_snap_counts(12)
+        assert len(reads) == 1

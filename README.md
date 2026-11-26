@@ -17,15 +17,35 @@ The target is **FanDuel tournament (GPP) upside**, especially the highest-scorin
    Optionally in Jupyter: `uv run jupyter lab` and open `draft.py`.
 4. The final lineup is printed as a table and written to `upload/upload.csv` in FanDuel's template column order.
 
+### Caching
+
+Every external source is cached per week (`ranking/`, odds in `spread/`) and reused while the file is newer than its TTL:
+
+| Source | TTL |
+|---|---|
+| Odds | 60 min |
+| Weather | 30 min |
+| Sleeper | 6 h |
+| FantasyPros | 6 h (2 h retry after a failed scrape) |
+| nflverse stats, snaps, FPA, giveaways | 3 days |
+
+A run with warm caches makes no HTTP calls. A failed odds or Sleeper refresh falls back to the last good file instead of dropping the source. The multi-MB nflverse season CSVs are parsed once per process and reused by every analysis step.
+
+### Correlation rules and locks
+
+Single-game builds let the optimizer choose any defense/QB pairing: a defense can score on sacks and turnovers while the opposing passer still produces, so banning the pair removes real upside combinations. Full slates keep the same-team stacking caps and the QB-vs-opposing-D exclusion. Those are preferences, not platform rules: when the configured locks (or a thin player pool) leave no legal lineup under them, the optimizer retries without the heuristics, prints a warning, and returns the best legal build instead of `No solution`.
+
 ### How projections are weighted
 
 Weekly tuning lives in `config.py`, not `draft.py`. The starting projection is a normalized weighted blend of FanDuel salary-file FPPG (20%), recency-weighted nflverse history (10%), Sleeper's weekly projection (35%), and FantasyPros' weekly projection (35%). The source weights live in `PROJECTION_WEIGHTS`; unavailable or non-positive sources are omitted and the remaining weights are renormalized. The two weekly projection sources therefore carry 70% of the blend when both are available, while the two backward-looking sources carry 30%. A previous-week FantasyPros fallback is logged and excluded from current-week blending. FantasyPros' official API can be used by setting `FANTASYPROS_API_KEY` (request a key [here](https://secure.fantasypros.com/api-keys/request/)); without a key, the HTML scraper logs HTTP/parser details. Set `FANTASYPROS_FORCE_REFRESH=1` to bypass the short cache during diagnosis.
 
 The run's `DATA SOURCES` section reports active-player match coverage and fallback use. If all projection inputs are missing/non-positive for a player, that player is blocked from the optimizer rather than treated as a zero-point bargain.
 
-Matchup adjustments are additive fantasy points, not multipliers. The main signal is the **Vegas implied team total** (`O/U` and spread): offense gets `(team total - slate average) * OFFENSE_TOTAL_WEIGHT`, while defenses get a bonus when the *opponent's* implied total is below average (`DEFENSE_TOTAL_WEIGHT`). Fantasy-points-allowed data (`FPA_WEIGHT`), injury context, recent target-share growth, and outdoor weather add further adjustments. Injury vacancies are shared across pass catchers using recent target shares; role growth can modestly raise both projection and ceiling. Precipitation chance alone gets a deliberately modest adjustment because it does not describe rain intensity. Kickers and players at or below `LOW_SALARY_SKIP` only receive the source/history blend. Other adjusted projections are clamped by safety caps (`MAX_SCORE`, `MIN_PROJ_MULTIPLIER`, `MAX_PROJ_MULTIPLIER`, `MAX_DEF_MULTIPLIER`).
+Matchup adjustments are additive fantasy points, not multipliers. The main signal is the **Vegas implied team total** (`O/U` and spread): offense gets `(team total - slate average) * OFFENSE_TOTAL_WEIGHT`, while defenses get a bonus when the *opponent's* implied total is below average (`DEFENSE_TOTAL_WEIGHT`). Fantasy-points-allowed data (`FPA_WEIGHT`) is shrunk toward the positional league average by `FPA_SHRINKAGE_GAMES` so a single blow-up game cannot dominate a small sample. Injury context, recent target-share growth, and outdoor weather add further adjustments. Weather uses a per-position wind × temperature × precipitation factor, bounded by `WEATHER_MAX_ADJUSTMENT` so correlated inputs cannot compound into an implausible swing (kickers are capped at −18%, defenses at +6%). Injury vacancies are shared across pass catchers using recent target shares; role growth can modestly raise both projection and ceiling. Precipitation chance alone gets a deliberately modest adjustment because it does not describe rain intensity. Kickers and players at or below `LOW_SALARY_SKIP` only receive the source/history blend. Other adjusted projections are clamped by safety caps (`MAX_SCORE`, `MIN_PROJ_MULTIPLIER`, `MAX_PROJ_MULTIPLIER`, `MAX_DEF_MULTIPLIER`).
 
-In the sorted player tables, `BlendBase` is the source/history blend before matchup, injury, and weather adjustments; it is not the raw FanDuel salary-file FPPG. The final `Proj` includes those adjustments (and, in GPP mode, may also include the upside tilt).
+A non-`ok` FantasyPros status (for example a partial scrape that returns only ten rows per position) is treated as unusable by default: a 35%-weight weekly source applied to some players and not others would silently change each player's effective blend. The source is dropped for the whole run and the remaining weights are renormalized; set `FANTASYPROS_ALLOW_DEGRADED = True` to use partial data anyway.
+
+In the sorted player tables, `BlendBase` is the source/history blend before matchup, injury, and weather adjustments; it is not the raw FanDuel salary-file FPPG. `Mean` is the adjusted projection (blend plus matchup, role, form, and weather) before the GPP upside tilt. `Ceil` is the empirical ceiling. `Proj` is the final value: `(1 - GPP_UPSIDE_WEIGHT) * Mean + GPP_UPSIDE_WEIGHT * Ceil` when the ceiling is higher, otherwise `Mean`.
 
 The pure projection math lives in `projection.py` so it can be unit-tested:
 ```

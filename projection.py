@@ -191,25 +191,48 @@ def calculate_precipitation_factor(precip_chance, pos):
         else:
             return 1.04
     elif pos == 'K':
+        # A forecast chance is not rain intensity, so keep the standalone
+        # penalty modest; wind and cold are the better-supported kicker risks.
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 0.99
+            return 1.0
         elif precip_chance < 75:
-            return 0.95
+            return 0.97
         else:
-            return 0.90
+            return 0.94
     elif pos in ('D', 'MVP'):
+        # The implied team total already prices most of a bad-weather scoring
+        # environment; the direct DST edge is small (turnovers/sacks).
         if precip_chance < 25:
             return 1.0
         elif precip_chance < 50:
-            return 1.01
+            return 1.0
         elif precip_chance < 75:
-            return 1.03
+            return 1.01
         else:
-            return 1.05
+            return 1.02
 
     return 1.0
+
+
+def combined_weather_factor(wind_speed, temp, precip_chance, pos,
+                            max_adjustment=None):
+    """Multiply a position's weather factors, optionally bounding the total.
+
+    Wind, temperature, and precipitation are correlated (storms are windy and
+    cold snaps are gusty), so the product can overstate a single forecast.
+    `max_adjustment` caps the factor at 1 +/- that amount; pass None to leave
+    the product unclamped.
+    """
+    factor = (calculate_wind_factor(wind_speed, pos)
+              * calculate_temperature_factor(temp, pos)
+              * calculate_precipitation_factor(precip_chance, pos))
+    max_adjustment = _finite_float(max_adjustment)
+    if max_adjustment is None or max_adjustment < 0:
+        return factor
+    limit = min(max_adjustment, 1.0)
+    return min(max(factor, 1.0 - limit), 1.0 + limit)
 
 
 def compute_team_totals(spread_df):

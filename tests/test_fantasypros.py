@@ -141,6 +141,59 @@ class TestGetProjectionsFallback:
         assert get_projections(9) == entries
         assert len(calls) == len(fantasypros.POSITIONS)
 
+    def test_degraded_provenance_survives_failure_ttl_while_cache_is_fresh(
+            self, tmp_path, monkeypatch):
+        fantasypros.config.CACHE_FOLDER = str(tmp_path)
+        monkeypatch.delenv('FANTASYPROS_FORCE_REFRESH', raising=False)
+        cached = [{'position': 'TE', 'name': 'test player', 'team': 'KC', 'stats': {}, 'fpts': 9.0}]
+        self._write_cache(12, cached, tmp_path)
+        now = __import__('time').time()
+        # The scrape partial-succeeded 3 hours ago (past the 2h failure TTL)
+        # but the data itself is still inside the 6h cache TTL.
+        with open(f"{tmp_path}/fantasypros_week_12.status.json", 'w') as f:
+            json.dump({
+                'status': 'degraded', 'requested_week': 12, 'source_week': 12,
+                'detail': 'partial current-week fetch', 'method': 'html',
+                'updated_at': now - 3 * 60 * 60,
+            }, f)
+
+        def fail_fetch(*args, **kwargs):
+            raise AssertionError('fresh partial cache should not refetch')
+
+        monkeypatch.setattr(fantasypros.requests, 'get', fail_fetch)
+
+        assert get_projections(12) == cached
+        status = fantasypros.get_projection_source_status()
+        assert status['status'] == 'degraded'
+        assert status['source_week'] == 12
+
+    def test_expired_degraded_cache_is_refetched(self, tmp_path, monkeypatch):
+        fantasypros.config.CACHE_FOLDER = str(tmp_path)
+        monkeypatch.delenv('FANTASYPROS_FORCE_REFRESH', raising=False)
+        cached = [{'position': 'TE', 'name': 'test player', 'team': 'KC', 'stats': {}, 'fpts': 9.0}]
+        self._write_cache(12, cached, tmp_path)
+        old = __import__('time').time() - 7 * 60 * 60
+        __import__('os').utime(f"{tmp_path}/fantasypros_week_12.json", (old, old))
+        with open(f"{tmp_path}/fantasypros_week_12.status.json", 'w') as f:
+            json.dump({
+                'status': 'degraded', 'requested_week': 12, 'source_week': 12,
+                'detail': 'partial current-week fetch', 'method': 'html',
+                'updated_at': old,
+            }, f)
+
+        class Resp:
+            status_code = 503
+            text = ''
+            url = 'https://www.fantasypros.com/nfl/projections/test.php'
+            headers = {'Content-Type': 'text/html'}
+
+        calls = []
+        monkeypatch.setattr(
+            fantasypros.requests, 'get', lambda *a, **k: calls.append(1) or Resp()
+        )
+        get_projections(12)
+        assert calls, 'expired partial cache should trigger a refresh attempt'
+
     def test_configured_api_key_uses_official_json_projections(self, tmp_path, monkeypatch):
         fantasypros.config.CACHE_FOLDER = str(tmp_path)
         monkeypatch.setenv('FANTASYPROS_API_KEY', 'test-key')

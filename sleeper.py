@@ -3,6 +3,7 @@
 
 import json
 import os
+import time
 
 import requests
 
@@ -12,11 +13,19 @@ from nfl_teams import normalize_player_name, normalize_team_abbr
 SLEEPER_BASE = 'https://api.sleeper.com'
 
 
+def _cache_is_fresh(path):
+    """Game-day projections go stale faster than historical stat caches."""
+    if not os.path.isfile(path):
+        return False
+    max_age = config.SLEEPER_CACHE_MAX_AGE_HOURS * 60 * 60
+    return time.time() - os.path.getmtime(path) < max_age
+
+
 def get_projections(week, season=None):
     """Raw Sleeper projections for a week, cached per week."""
     season = season or int(config.SEASON_START.split('/')[-1])
     cache_file = f"{config.CACHE_FOLDER}/sleeper_week_{week}.json"
-    if config.cache_is_fresh(cache_file):
+    if _cache_is_fresh(cache_file):
         print('return cached data', f"sleeper week {week}")
         with open(cache_file) as f:
             return json.load(f)
@@ -27,7 +36,16 @@ def get_projections(week, season=None):
            "?season_type=regular&position[]=QB&position[]=RB&position[]=WR"
            "&position[]=TE&position[]=K&position[]=DEF")
     print('fetching data', url)
-    data = requests.get(url, timeout=60).json()
+    try:
+        data = requests.get(url, timeout=60).json()
+    except Exception as exc:
+        # Keep the last good snapshot instead of dropping the source entirely
+        # on a transient API failure.
+        if os.path.isfile(cache_file):
+            print(f'sleeper refresh failed ({exc}); using stale cache')
+            with open(cache_file) as f:
+                return json.load(f)
+        raise
     with open(cache_file, 'w') as f:
         json.dump(data, f)
     return data

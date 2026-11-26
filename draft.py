@@ -20,16 +20,15 @@ from optimizer_rules import (
     is_player_override,
     split_active_locks,
     should_block_backup_qb,
+    upload_slots,
 )
 import numpy as np
 import pandas as pd
 from odds import get_metabet_spread
 from projection import (
-    calculate_precipitation_factor,
-    calculate_temperature_factor,
-    calculate_wind_factor,
     blend_available_projections,
     cap_projection,
+    combined_weather_factor,
     compute_role_trend_bonus,
     compute_role_competition_penalty,
     compute_qb_health_drop,
@@ -112,6 +111,7 @@ MAX_SALARY = config.MAX_SALARY
 # run degrades gracefully (missing data -> neutral), then reports what failed.
 DATA_STATUS = {}
 STALE_LOCK_WARNING_REPORTED = False
+RELAXED_HEURISTICS_WARNING_REPORTED = False
 
 
 def _record_source(name, ok, detail=''):
@@ -401,6 +401,19 @@ try:
         # Previous-week projections are useful provenance, not valid current
         # inputs. Let the normalized blend fall back to the other sources.
         print(f"Ignoring stale FantasyPros week {fp_source_status.get('source_week')} fallback")
+        fp_proj_map = {}
+    fp_status = fp_source_status.get('status')
+    if (fp_proj_map and fp_status != 'ok'
+            and not config.FANTASYPROS_ALLOW_DEGRADED):
+        # A partial scrape covers only part of the pool. Giving a 35%-weight
+        # weekly source to some players and not others silently changes each
+        # player's effective blend, so drop it entirely and let the normalized
+        # blend fall back consistently across the remaining sources.
+        print(
+            f"WARNING: FantasyPros projections are '{fp_status}' (partial scrape); "
+            "excluding them so every player uses the same blend weights. "
+            "Set FANTASYPROS_API_KEY or fix the scraper to restore this source."
+        )
         fp_proj_map = {}
     _record_source(
         'FantasyPros',
@@ -902,9 +915,10 @@ if not weather_df.empty:
         precip = game.get('precipitation_chance')
         for team in (away, home):
             for pos in ALL_POSITIONS:
-                combined_factor = (calculate_wind_factor(wind, pos)
-                                   * calculate_temperature_factor(temp, pos)
-                                   * calculate_precipitation_factor(precip, pos))
+                combined_factor = combined_weather_factor(
+                    wind, temp, precip, pos,
+                    config.WEATHER_MAX_ADJUSTMENT.get(pos),
+                )
                 weather_factor_map[(team, pos)] = combined_factor
 
 # Flag any slate team that got no weather factor despite playing at an
@@ -1025,10 +1039,10 @@ def calculate_adjusted_projection(p):
 
     # Weather adjustment (additive, capped at 40% of base)
     weather_bonus = 0
-    combined_weather_factor = weather_factor_map.get((p.team, p.pos), 1.0)
-    if combined_weather_factor != 1.0:
-        p.kv_store['weather_factor'] = combined_weather_factor
-        weather_bonus = base_score * (combined_weather_factor - 1.0)
+    weather_adjustment_factor = weather_factor_map.get((p.team, p.pos), 1.0)
+    if weather_adjustment_factor != 1.0:
+        p.kv_store['weather_factor'] = weather_adjustment_factor
+        weather_bonus = base_score * (weather_adjustment_factor - 1.0)
         max_weather_bonus = base_score * config.MAX_WEATHER_BONUS
         weather_bonus = max(min(weather_bonus, max_weather_bonus), -max_weather_bonus)
         matchup_bonus += weather_bonus
@@ -1258,12 +1272,16 @@ for p in players:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
         weather = float(p.kv_store.get('weather_factor', 1.0))
-        skills.append((p.name, p.pos, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, weather))
+        mean_proj = float(p.kv_store.get('adjusted_proj') or p.proj)
+        ceiling = float(p.kv_store.get('ceiling') or p.proj)
+        skills.append((p.name, p.pos, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, mean_proj, ceiling, opponent, weather))
     elif p.pos == 'QB' and p.cost >= MIN_QB_SALARY and p.proj > 0:
         team_total = team_totals.get(p.team, avg_team_total)
         total_deviation = team_total - avg_team_total
         weather = float(p.kv_store.get('weather_factor', 1.0))
-        qbs.append((p.name, p.pos, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, opponent, weather))
+        mean_proj = float(p.kv_store.get('adjusted_proj') or p.proj)
+        ceiling = float(p.kv_store.get('ceiling') or p.proj)
+        qbs.append((p.name, p.pos, p.proj, p.cost, p.proj / p.cost, team_total, total_deviation, base_fppg, mean_proj, ceiling, opponent, weather))
 
 starter_map = build_starter_map(players, questionable_df)
 filtered_mvps = filter_mvps(mvps, players, starter_map)
@@ -1272,17 +1290,19 @@ filtered_mvps = filter_mvps(mvps, players, starter_map)
 # Display: sorted defenses / QBs / MVPs
 # ============================================================
 
-PROJ_TABLE_HEADER = (f"{'Name':<35} {'Proj':>8} {'Salary':>10} {'Value':>8} "
+PROJ_TABLE_HEADER = (f"{'Name':<35} {'Proj':>8} {'Mean':>6} {'Ceil':>6} {'Salary':>10} {'Value':>8} "
                      f"{'TeamTotal':>10} {'Dev':>8} {'Opp':>5} {'BlendBase':>10} {'Weather':>8}")
 
 
-def _proj_row(name, proj, cost, value, team_total, total_deviation, base_fppg, opp, weather):
+def _proj_row(name, proj, cost, value, team_total, total_deviation, base_fppg,
+              mean_proj, ceiling, opp, weather):
     arrow = '↓' if weather < 0.85 else ''
-    return (f"{name:<35} {proj:>8.2f} ${cost:>9,.0f} {(value * 1000):>7.1f}x "
-            f"{team_total:>10.2f} {total_deviation:>8.2f} {opp:>5} {base_fppg:>10.2f} {weather:>7.3f}{arrow}")
+    return (f"{name:<35} {proj:>8.2f} {mean_proj:>6.2f} {ceiling:>6.2f} ${cost:>9,.0f} "
+            f"{(value * 1000):>7.1f}x {team_total:>10.2f} {total_deviation:>8.2f} "
+            f"{opp:>5} {base_fppg:>10.2f} {weather:>7.3f}{arrow}")
 
 
-def print_sorted_proj_table(title, rows, width=110):
+def print_sorted_proj_table(title, rows, width=124):
     """Print a QB/skill-position table (shared header and row format)."""
     print_table(title, PROJ_TABLE_HEADER, [_proj_row(r[0], *r[2:]) for r in rows], width)
 
@@ -1448,8 +1468,14 @@ def block_function(p):
     )
 
 
-def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=False):
-    """Custom rules: block players, and at most 1 per position per team."""
+def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=False,
+                             relax_heuristics=False):
+    """Custom rules: block players, and at most 1 per position per team.
+
+    `relax_heuristics` drops the optional correlation/stacking heuristics while
+    keeping eligibility, locks, and bans. It is used as a fallback when those
+    heuristics make a requested set of locks infeasible.
+    """
     custom_rules = [
         CustomRule(
             group_a=lambda p: p,
@@ -1474,56 +1500,38 @@ def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=Fal
                 )
 
         # At most 2 QBs total in a single-game lineup, including the MVP.
-        custom_rules.append(
-            CustomRule(
-                group_a=lambda p: base_position(p) == 'QB',
-                group_b=lambda p: False,
-                comparison=lambda sum, a, b: sum(a) <= 2,
-            )
-        )
-
-        # Preserve the showdown QB/D restriction; opposing WR/D stacks remain
-        # eligible for the optimizer to choose.
-        for defense in (p for p in players if p.pos == 'D'):
-            opponent = get_opponent(defense)
-            for quarterback in players:
-                if quarterback.team != opponent or base_position(quarterback) != 'QB':
-                    continue
-                base_name = quarterback.name.replace(' (MVP)', '')
-                custom_rules.append(
-                    CustomRule(
-                        group_a=lambda p, team=defense.team: (
-                            p.pos == 'D' and p.team == team
-                        ),
-                        group_b=lambda p, name=base_name: (
-                            p.name.replace(' (MVP)', '') == name
-                        ),
-                        comparison=lambda sum, a, b: sum(a) + sum(b) <= 1,
-                    )
+        if not relax_heuristics:
+            custom_rules.append(
+                CustomRule(
+                    group_a=lambda p: base_position(p) == 'QB',
+                    group_b=lambda p: False,
+                    comparison=lambda sum, a, b: sum(a) <= 2,
                 )
+            )
 
         return OptimizerSettings(custom_rules=custom_rules, min_teams=2)
 
     # Non-single: at most 1 player per (position, team)
-    for pos in ['RB', 'WR', 'QB', 'TE']:
-        grouped = defaultdict(list)
-        for p in players:
-            if p.pos == pos:
-                grouped[p.team].append(p)
-        for team, group in grouped.items():
-            if len(group) > 1:
-                custom_rules.append(
-                    CustomRule(
-                        group_a=lambda p, team=team, pos=pos: p.pos == pos and p.team == team,
-                        group_b=lambda p: False,
-                        comparison=lambda sum, a, b: sum(a) <= 1,
+    if not relax_heuristics:
+        for pos in ['RB', 'WR', 'QB', 'TE']:
+            grouped = defaultdict(list)
+            for p in players:
+                if p.pos == pos:
+                    grouped[p.team].append(p)
+            for team, group in grouped.items():
+                if len(group) > 1:
+                    custom_rules.append(
+                        CustomRule(
+                            group_a=lambda p, team=team, pos=pos: p.pos == pos and p.team == team,
+                            group_b=lambda p: False,
+                            comparison=lambda sum, a, b: sum(a) <= 1,
+                        )
                     )
-                )
 
     small_slate_stacks = (
         SLATE_GAME_COUNT <= config.SMALL_SLATE_STACK_RULES_MAX_GAMES
     )
-    if not small_slate_stacks:
+    if not small_slate_stacks and not relax_heuristics:
         # On larger slates, retain the anti-correlation heuristics. Short
         # slates benefit from allowing same-team stacks for tournament upside.
         for team in set(p.team for p in players if p.pos in ('QB', 'RB')):
@@ -1535,7 +1543,7 @@ def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=Fal
                 )
             )
 
-    if not small_slate_stacks or forbid_same_team_wr_te:
+    if (not small_slate_stacks or forbid_same_team_wr_te) and not relax_heuristics:
         # Larger slates ban WR/TE stacks. On short slates this can also be
         # enabled for the candidate search that estimates the no-pair build.
         for team in set(p.team for p in players if p.pos in ('WR', 'TE')):
@@ -1550,20 +1558,33 @@ def build_optimizer_settings(players, block_function, forbid_same_team_wr_te=Fal
     # Let projections and the lineup objective decide whether an opposing
     # skill player/defense pairing is worthwhile. Keep only the QB/DST
     # restriction; the comparison is conditional on selecting that defense.
-    for defense in (p for p in players if p.pos == 'D'):
-        custom_rules.append(
-            forbid_opposing_positions_with_defense(
-                defense.team,
-                get_opponent(defense),
-                ('QB',),
-                config.ROSTER_SIZE_CLASSIC,
+    if not relax_heuristics:
+        for defense in (p for p in players if p.pos == 'D'):
+            custom_rules.append(
+                forbid_opposing_positions_with_defense(
+                    defense.team,
+                    get_opponent(defense),
+                    ('QB',),
+                    config.ROSTER_SIZE_CLASSIC,
+                )
             )
-        )
 
     return OptimizerSettings(
         custom_rules=custom_rules,
         min_teams=3,
         no_offense_against_defense=False,
+    )
+
+
+def _report_relaxed_heuristics():
+    """Announce once that a heuristic was dropped to keep the lineup legal."""
+    global RELAXED_HEURISTICS_WARNING_REPORTED
+    if RELAXED_HEURISTICS_WARNING_REPORTED:
+        return
+    RELAXED_HEURISTICS_WARNING_REPORTED = True
+    print(
+        "WARNING: no legal lineup satisfied the optional stacking heuristics; "
+        "relaxed them (same-team caps) to return a legal build."
     )
 
 
@@ -1604,6 +1625,25 @@ def optimize_lineup(players, score_by='proj', extra_locked=None, extra_banned=No
             ),
             constraints=active_constraints,
         )
+        if roster is None and not forbid_same_team_wr_te:
+            # Correlation/stacking heuristics are preferences, not platform
+            # rules. If honoring them leaves no legal lineup for the requested
+            # locks, retry with only the hard constraints so a legal build is
+            # still produced (and say so). The no-pair variant is skipped: its
+            # caller already has the normal build as a candidate.
+            roster = run(
+                rule_set=ACTIVE_RULE_SET,
+                player_pool=players,
+                verbose=False,
+                optimizer_settings=build_optimizer_settings(
+                    players, block_function,
+                    forbid_same_team_wr_te=False,
+                    relax_heuristics=True,
+                ),
+                constraints=active_constraints,
+            )
+            if roster is not None:
+                _report_relaxed_heuristics()
     finally:
         for p in players:
             p.proj = original_proj[p.name]
@@ -1818,60 +1858,59 @@ def enumerate_single_game_lineups(players, limit=None):
     min_mvp_cost = min(p.cost for p in mvp_pool)
     max_mvp_cost = max(p.cost for p in mvp_pool)
 
-    results = []
-    for combo in itertools.combinations(regular_pool, need):
-        parts = list(combo) + locked_regulars
-        salary5 = sum(p.cost for p in parts)
-        if salary5 + min_mvp_cost > salary_max:
-            continue
-        if salary5 + max_mvp_cost < salary_min:
-            continue
-
-        position_counts = defaultdict(int)
-        team_counts = defaultdict(int)
-        for p in parts:
-            position_counts[p.pos] += 1
-            team_counts[p.team] += 1
-        if any(position_counts[pos] > cap for pos, cap in pos_max.items()):
-            continue
-        if any(count > max_team_players for count in team_counts.values()):
-            continue
-        qb_count = position_counts.get('QB', 0)
-        if qb_count > 2:
-            continue
-        bases = {base_name(p.name) for p in parts}
-
-        for m in mvp_pool:
-            if base_name(m.name) in bases:
+    def search(max_qbs=2):
+        """Enumerate legal rosters, optionally enforcing the soft heuristics."""
+        found = []
+        for combo in itertools.combinations(regular_pool, need):
+            parts = list(combo) + locked_regulars
+            salary5 = sum(p.cost for p in parts)
+            if salary5 + min_mvp_cost > salary_max:
                 continue
-            salary = salary5 + m.cost
-            if salary < salary_min or salary > salary_max:
-                continue
-            if team_counts.get(m.team, 0) + 1 > max_team_players:
-                continue
-            if len(team_counts) + (0 if m.team in team_counts else 1) < 2:
-                continue
-            mvp_is_qb = m.kv_store.get('base_pos') == 'QB'
-            if qb_count + (1 if mvp_is_qb else 0) > 2:
+            if salary5 + max_mvp_cost < salary_min:
                 continue
 
-            roster_players = parts + [m]
-            # A defense scores when the opposing passing game fails, so starting
-            # it alongside that team's QB bets both sides of one outcome. A full
-            # "no opposing offense" rule is impossible in a two-team showdown --
-            # the 2-team minimum forces both sides onto every roster, which would
-            # ban every defense -- so only the QB pairing is excluded.
-            if any(
-                (q.kv_store.get('base_pos') or q.pos) == 'QB'
-                and q.team == get_opponent(d)
-                for d in roster_players if d.pos == 'D'
-                for q in roster_players
-            ):
+            position_counts = defaultdict(int)
+            team_counts = defaultdict(int)
+            for p in parts:
+                position_counts[p.pos] += 1
+                team_counts[p.team] += 1
+            if any(position_counts[pos] > cap for pos, cap in pos_max.items()):
                 continue
-            overlap_penalty = same_team_wr_overlap_penalty(roster_players)
-            wta = sum(p.kv_store.get('ceiling') or p.proj for p in roster_players) - overlap_penalty
-            proj = sum(p.proj for p in roster_players) - overlap_penalty
-            results.append((wta, proj, salary, roster_players))
+            if any(count > max_team_players for count in team_counts.values()):
+                continue
+            qb_count = position_counts.get('QB', 0)
+            if max_qbs is not None and qb_count > max_qbs:
+                continue
+            bases = {base_name(p.name) for p in parts}
+
+            for m in mvp_pool:
+                if base_name(m.name) in bases:
+                    continue
+                salary = salary5 + m.cost
+                if salary < salary_min or salary > salary_max:
+                    continue
+                if team_counts.get(m.team, 0) + 1 > max_team_players:
+                    continue
+                if len(team_counts) + (0 if m.team in team_counts else 1) < 2:
+                    continue
+                mvp_is_qb = m.kv_store.get('base_pos') == 'QB'
+                if (max_qbs is not None
+                        and qb_count + (1 if mvp_is_qb else 0) > max_qbs):
+                    continue
+
+                roster_players = parts + [m]
+                overlap_penalty = same_team_wr_overlap_penalty(roster_players)
+                wta = sum(p.kv_store.get('ceiling') or p.proj for p in roster_players) - overlap_penalty
+                proj = sum(p.proj for p in roster_players) - overlap_penalty
+                found.append((wta, proj, salary, roster_players))
+        return found
+
+    results = search()
+    if not results:
+        # Drop the two-QB preference so an unusual lock set still resolves.
+        results = search(max_qbs=None)
+        if results:
+            _report_relaxed_heuristics()
 
     # Winner-take-all showdown objective: maximize aggregate player ceiling.
     # Weighted projection is retained as a tie-breaker and reporting diagnostic.
@@ -2040,7 +2079,10 @@ def print_optimized_roster(roster):
 
     # Make the objective auditable: every point in total_score comes from the
     # per-player blend below, and the ceiling column shows the upside it draws on.
-    print("lineup selection objective = aggregate player ceiling (weighted proj is diagnostic)")
+    objective = ('aggregate player ceiling (weighted proj is diagnostic)'
+                 if SINGLE_GAME
+                 else 'aggregate weighted projection (ceiling is diagnostic)')
+    print(f"lineup selection objective = {objective}")
     print(f"weighted proj = {1 - upside_weight:.2f} * adjusted + {upside_weight:.2f} * ceiling "
           f"(upside applied only when ceiling > adjusted; upside weight = {upside_weight:.2f})")
     wr_overlap_penalty = same_team_wr_overlap_penalty(roster.players)
@@ -2069,9 +2111,13 @@ if sneaky_upside_plays:
 
 def record_optimizer_source_coverage():
     """Report source coverage for players that the optimizer can actually use."""
+    locked_names = set(config.LOCKED)
+    banned_names = set(BANNED) - locked_names
     eligible = [
         p for p in players
-        if p.pos != 'MVP' and not block_function(p)
+        if p.pos != 'MVP'
+        and p.name not in banned_names
+        and not block_function(p)
     ]
     pool_count = sum(p.pos != 'MVP' for p in players)
     offensive_players = [p for p in eligible if p.pos in ('QB', 'RB', 'WR', 'TE', 'K')]
@@ -2145,7 +2191,13 @@ def record_optimizer_source_coverage():
     fp_missing = [p for p in eligible if not _has_projection(fp_projection_for(p))]
     if sleeper_missing:
         print(f"WARNING: Sleeper missing {len(sleeper_missing)}/{len(eligible)} optimizer-eligible players: {_player_labels(sleeper_missing)}")
-    if fp_missing:
+    if fp_missing and not fp_proj_map:
+        print(
+            f"WARNING: FantasyPros excluded for this run "
+            f"({fp_source_status.get('status')}); all players blend FanDuel FPPG, "
+            "nflverse history, and Sleeper"
+        )
+    elif fp_missing:
         print(f"WARNING: FantasyPros missing current-week projections for {len(fp_missing)}/{len(eligible)} optimizer-eligible players")
     if upside_matched < len(offensive_players):
         print(f"WARNING: historical ceiling unavailable for {len(offensive_players) - upside_matched}/{len(offensive_players)} optimizer-eligible offensive players")
@@ -2327,26 +2379,24 @@ if roster and not SINGLE_GAME:
 # ============================================================
 
 if roster:
-    ORDERED_COLS = ['QB', 'RB', 'RB', 'WR', 'WR', 'WR', 'TE', 'FLEX', 'DEF']
-
-    def get_match_names(col):
-        if col == 'DEF':
-            return ['D']
-        elif col == 'FLEX':
-            return ['RB', 'WR']
-        return [col]
-
-    headers = []
+    slots = upload_slots(SINGLE_GAME)
+    headers = [name for name, _ in slots]
     player_names = []
     roster_copy = roster.players.copy()
-    for c in ORDERED_COLS:
-        headers.append(c)
-        match_names = get_match_names(c)
-        for r in roster_copy:
-            if r.pos in match_names:
-                player_names.append(f"{r.kv_store['Id']}:{r.name}")
-                roster_copy.remove(r)
+    for slot_name, accepted in slots:
+        for player in roster_copy:
+            if player.pos in accepted:
+                # FanDuel identifies the MVP by column, not by a name suffix.
+                display_name = player.name.replace(' (MVP)', '')
+                player_names.append(f"{player.kv_store['Id']}:{display_name}")
+                roster_copy.remove(player)
                 break
+
+    if len(player_names) != len(headers) or roster_copy:
+        print(
+            f"WARNING: upload CSV incomplete ({len(player_names)}/{len(headers)} "
+            f"slots filled); unplaced: {[p.name for p in roster_copy]}"
+        )
 
     with open(UPLOAD_FILE, 'w') as f:
         f.write(','.join(headers))

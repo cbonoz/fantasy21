@@ -83,10 +83,24 @@ def _fresh_cached_status(week, cache_file, cached):
 
     if status and status.get('requested_week') == week:
         age = time.time() - float(status.get('updated_at') or 0)
-        ttl_hours = (config.FANTASYPROS_CACHE_MAX_AGE_HOURS
-                     if status.get('status') == 'ok'
-                     else config.FANTASYPROS_FAILURE_CACHE_HOURS)
-        if age < ttl_hours * 60 * 60:
+        status_name = status.get('status')
+        cache_age = (
+            time.time() - os.path.getmtime(cache_file)
+            if os.path.isfile(cache_file) else None
+        )
+        ttl = config.FANTASYPROS_CACHE_MAX_AGE_HOURS * 60 * 60
+        failure_ttl = config.FANTASYPROS_FAILURE_CACHE_HOURS * 60 * 60
+        if status_name == 'ok':
+            fresh = age < ttl
+        elif status_name == 'degraded' and cached and cache_age is not None:
+            # A partial success is still the rows we have. Keep its provenance
+            # for the cache's full lifetime; the short failure TTL exists to
+            # retry scrapes that produced nothing, not to relabel partial data
+            # as complete.
+            fresh = cache_age < ttl
+        else:
+            fresh = age < failure_ttl
+        if fresh:
             return status
 
     # Older cache files predate provenance sidecars; retain them only within

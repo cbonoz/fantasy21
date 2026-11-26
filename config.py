@@ -14,8 +14,19 @@ UPLOAD_FOLDER = './upload'
 CACHE_FOLDER = './ranking'
 CACHE_MAX_AGE_DAYS = 3
 WEATHER_CACHE_MAX_AGE_MINUTES = 30
+# Live betting lines move during the day, so odds are refreshed hourly instead
+# of on the multi-day historical-cache TTL.
+ODDS_CACHE_MAX_AGE_MINUTES = 60
+# Sleeper republishes weekly projections through game day. A six-hour TTL keeps
+# lineup news current while avoiding a multi-MB fetch on every run.
+SLEEPER_CACHE_MAX_AGE_HOURS = 6
 FANTASYPROS_CACHE_MAX_AGE_HOURS = 6
 FANTASYPROS_FAILURE_CACHE_HOURS = 2
+# A partial (degraded) scrape can cover only a subset of the slate, which would
+# give a 35%-weight weekly source to some players and not others. Exclude a
+# non-ok source entirely so every player is blended with the same weights; set
+# True only when you have checked that partial coverage is acceptable.
+FANTASYPROS_ALLOW_DEGRADED = False
 
 
 def cache_is_fresh(path):
@@ -190,6 +201,24 @@ GIVEAWAY_SHRINKAGE_GAMES = 4.0
 
 # Fantasy points allowed (FPA) weights
 FPA_WEIGHT = 0.25                # boost vs. defenses allowing more points
+# Shrink a team's points-allowed rate toward the league average for that
+# position by this many games. A single blow-up game (e.g. 25 TE points in
+# Week 1) should not outweigh nine quiet games in a small, noisy sample.
+FPA_SHRINKAGE_GAMES = 4.0
+# Bump when the FPA calculation changes so a cache from the old method is not
+# silently reused.
+FPA_CACHE_VERSION = 2
+
+# Bound the combined (wind x temperature x precipitation) weather factor by
+# position. The three inputs are correlated and a game-time forecast is
+# uncertain, so let one bad forecast move a projection only so far. Kickers are
+# the clearest weather case (wind/cold), but a 30% haircut from compounding is
+# too steep; most of a defense's bad-weather edge is already in the implied
+# team total, so its direct boost stays small.
+WEATHER_MAX_ADJUSTMENT = {
+    'K': 0.18,
+    'D': 0.06,
+}
 
 # Small, one-time penalty when a previously absent teammate returns and the
 # player's recent share falls. Require a meaningful usage share/change and cap
@@ -237,13 +266,29 @@ READD = [
 ALLOW_PLAYERS = [
     'Mason Rudolph',
 ]
+
+# These lists are generally ad-hoc and can be ignored by AI updates generally
 BANNED_CLASSIC = [
+    'DeVonta Smith','Kyle Monangai', 'CeeDee Lamb', 'Kansas City Chiefs'
+    # 'DeVonta Smith', 'Kyle Monangai', 'Kansas City Chiefs', 'Detroit Lions', 'Jared Goff', 'Buffalo Bills', 'George Pickens'
 ]
+
 BANNED_SINGLE = [
+    "D'Andre Swift", "D'Andre Swift (MVP)", 'DJ Moore', 'James Cook III (MVP)', 'Kendre Miller', 'Brevyn Spann-Ford',
+    # 'Kyle Monangai (MVP)', "D'Andre Swift",
+    'Pierre Strong Jr.','Savion Williams (MVP)', 'Christian Watson (MVP)', 'Colby Parkinson', 'Matthew Stafford (MVP)'
 ]
 
 LOCKED = [
-     'Mason Rudolph',
+
+    # 'Emmett Johnson (MVP)', 'James Cook III', 'Ty Johnson', 'George Pickens',
+    'Saquon Barkley',
+    #  'Buffalo Bills'
+    # 'Chicago Bears',
+    # 'Sam LaPorta',
+    # 'CeeDee Lamb', 'Dallas Cowboys',
+    # 'Jared Goff (MVP)',
+    #  'Mason Rudolph',  'Kyren Williams',
 ]
 
 BLOCKED_TEAMS = []

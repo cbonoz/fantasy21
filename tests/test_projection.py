@@ -10,6 +10,7 @@ from projection import (
     blend_available_projections,
     compute_role_trend_bonus,
     compute_role_competition_penalty,
+    combined_weather_factor,
     compute_recent_form_adjustment,
     compute_qb_health_drop,
     compute_qb_pass_catcher_penalty,
@@ -87,6 +88,42 @@ class TestPrecipitationFactor:
 
     def test_moderate_chance_alone_causes_only_small_passing_penalty(self):
         assert calculate_precipitation_factor(43, 'WR') == pytest.approx(0.98)
+
+    def test_kicker_and_defense_precip_stay_modest(self):
+        # A forecast chance is not rain intensity; the combined cap handles the
+        # correlated wind/precip product.
+        assert calculate_precipitation_factor(80, 'K') == pytest.approx(0.94)
+        assert calculate_precipitation_factor(80, 'D') == pytest.approx(1.02)
+        assert calculate_precipitation_factor(43, 'K') == 1.0
+        assert calculate_precipitation_factor(43, 'D') == 1.0
+
+
+class TestCombinedWeatherFactor:
+    def test_multiplies_the_three_inputs(self):
+        expected = (calculate_wind_factor(21, 'K')
+                    * calculate_temperature_factor(35, 'K')
+                    * calculate_precipitation_factor(84, 'K'))
+        assert combined_weather_factor(21, 35, 84, 'K') == pytest.approx(expected)
+
+    def test_cap_bounds_a_compounded_penalty(self):
+        uncapped = combined_weather_factor(21, 35, 84, 'K')
+        capped = combined_weather_factor(21, 35, 84, 'K', max_adjustment=0.18)
+        assert uncapped < capped
+        assert capped == pytest.approx(0.82)
+
+    def test_cap_bounds_a_compounded_boost(self):
+        uncapped = combined_weather_factor(21, 35, 84, 'D')
+        capped = combined_weather_factor(21, 35, 84, 'D', max_adjustment=0.06)
+        assert uncapped > capped
+        assert capped == pytest.approx(1.06)
+
+    def test_missing_or_invalid_cap_leaves_factor_unchanged(self):
+        assert combined_weather_factor(5, 70, 0, 'D') == 1.0
+        assert combined_weather_factor(5, 70, 0, 'D', max_adjustment=None) == 1.0
+        assert (combined_weather_factor(21, 35, 84, 'K', max_adjustment=-1)
+                == pytest.approx(calculate_wind_factor(21, 'K')
+                                 * calculate_temperature_factor(35, 'K')
+                                 * calculate_precipitation_factor(84, 'K')))
 
 
 class TestComputeTeamTotals:
