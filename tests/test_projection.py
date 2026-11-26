@@ -166,8 +166,12 @@ class TestRoleAdjustments:
         assert compute_same_team_wr_overlap_penalty({'PHI': 3}) == pytest.approx(4)
 
     def test_wr_te_penalty_is_small_bounded_and_requires_both_usage_shares(self):
-        assert compute_same_team_wr_te_overlap_penalty(0.25, 0.20) == pytest.approx(0.6)
-        assert compute_same_team_wr_te_overlap_penalty(0.50, 0.40) == pytest.approx(1.0)
+        assert compute_same_team_wr_te_overlap_penalty(
+            0.25, 0.20, points_per_share=4.0, max_penalty=1.25
+        ) == pytest.approx(0.8)
+        assert compute_same_team_wr_te_overlap_penalty(
+            0.50, 0.40, points_per_share=4.0, max_penalty=1.25
+        ) == pytest.approx(1.25)
         assert compute_same_team_wr_te_overlap_penalty(None, 0.20) == 0.0
 
 
