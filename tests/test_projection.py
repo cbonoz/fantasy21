@@ -18,6 +18,7 @@ from projection import (
     adjust_ceiling_for_role_change,
     adjust_ceiling_for_weather,
     compute_kicker_total_bonus,
+    compute_same_team_rb_overlap_penalty,
     compute_same_team_wr_overlap_penalty,
     compute_same_team_wr_te_overlap_penalty,
     center_empirical_samples,
@@ -202,6 +203,12 @@ class TestRoleAdjustments:
         assert compute_same_team_wr_overlap_penalty({'PHI': 1, 'WAS': 1}) == 0
         assert compute_same_team_wr_overlap_penalty({'PHI': 2, 'WAS': 1}) == pytest.approx(2)
         assert compute_same_team_wr_overlap_penalty({'PHI': 3}) == pytest.approx(4)
+
+    def test_same_team_rb_penalty_matches_the_overlap_rule(self):
+        assert compute_same_team_rb_overlap_penalty({'PIT': 1}) == 0
+        assert compute_same_team_rb_overlap_penalty({'PIT': 2, 'DEN': 1}) == pytest.approx(2)
+        assert compute_same_team_rb_overlap_penalty({'PIT': 3}, 1.5) == pytest.approx(3)
+        assert compute_same_team_rb_overlap_penalty({'PIT': 2}, 0) == 0
 
     def test_wr_te_penalty_is_small_bounded_and_requires_both_usage_shares(self):
         assert compute_same_team_wr_te_overlap_penalty(

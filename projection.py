@@ -490,19 +490,34 @@ def adjust_ceiling_for_weather(ceiling, weather_factor, max_adjustment=0.40):
     return ceiling * factor
 
 
-def compute_same_team_wr_overlap_penalty(team_wr_counts, penalty_per_extra=2.0):
-    """Penalize actual roster overlap, leaving standalone WR projections intact."""
+def compute_same_team_overlap_penalty(team_counts, penalty_per_extra=2.0):
+    """Penalize actual roster overlap, leaving standalone players intact."""
     penalty_per_extra = _finite_float(penalty_per_extra)
     if penalty_per_extra is None or penalty_per_extra <= 0:
         return 0.0
     penalty = 0.0
-    for count in team_wr_counts.values():
+    for count in team_counts.values():
         try:
             extras = max(int(count) - 1, 0)
         except (TypeError, ValueError, OverflowError):
             continue
         penalty += extras * penalty_per_extra
     return penalty
+
+
+def compute_same_team_wr_overlap_penalty(team_wr_counts, penalty_per_extra=2.0):
+    """WR-specific alias for the shared same-team overlap penalty."""
+    return compute_same_team_overlap_penalty(team_wr_counts, penalty_per_extra)
+
+
+def compute_same_team_rb_overlap_penalty(team_rb_counts, penalty_per_extra=2.0):
+    """Penalize two-plus same-team RBs competing for the same touches.
+
+    Their projections are individually honest but not independent: a big game
+    for one usually comes at the other's expense, so summing two ceilings
+    overstates the backfield's combined upside.
+    """
+    return compute_same_team_overlap_penalty(team_rb_counts, penalty_per_extra)
 
 
 def compute_same_team_wr_te_overlap_penalty(

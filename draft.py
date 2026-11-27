@@ -38,6 +38,7 @@ from projection import (
     adjust_ceiling_for_role_change,
     adjust_ceiling_for_weather,
     compute_kicker_total_bonus,
+    compute_same_team_rb_overlap_penalty,
     compute_same_team_wr_overlap_penalty,
     compute_same_team_wr_te_overlap_penalty,
     compute_team_totals,
@@ -273,6 +274,9 @@ SINGLE_GAME = len(set_teams) == 2
 SLATE_GAME_COUNT = int(df['Game'].dropna().astype(str).str.strip().replace('', pd.NA).nunique())
 if SLATE_GAME_COUNT == 0:
     SLATE_GAME_COUNT = max(len(set_teams) // 2, 1)
+# Defined early so the diagnostic tables can hide unrostable players.
+BANNED = config.BANNED_SINGLE if SINGLE_GAME else config.BANNED_CLASSIC
+DISPLAY_BANNED = set(BANNED) - set(config.LOCKED)
 
 MIN_SALARY = config.MIN_SALARY_SINGLE if SINGLE_GAME else config.MIN_SALARY_CLASSIC
 
@@ -1295,6 +1299,8 @@ skills = []
 mvps = []
 
 for p in players:
+    if p.name in DISPLAY_BANNED and p.pos != 'MVP':
+        continue
     base_fppg = float(p.kv_store.get('base_proj') or p.kv_store.get('FPPG') or 0)
     opponent = get_opponent(p)
 
@@ -1364,6 +1370,35 @@ if SINGLE_GAME:
 print_sorted_proj_table("SORTED QBs", sorted(qbs, key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
 for _pos in ('RB', 'WR', 'TE'):
     print_sorted_proj_table(f"SORTED {_pos}s", sorted((s for s in skills if s[1] == _pos), key=lambda x: x[4], reverse=True)[:config.TOP_N_DISPLAY])
+
+if SINGLE_GAME:
+    # Every non-MVP slot is AnyFLEX, so a QB and a WR compete for the same
+    # spot purely on projection, ceiling, and salary. A per-position view can
+    # hide that comparison; this table shows it directly.
+    flex_rows = []
+    for p in players:
+        if p.pos == 'MVP' or p.proj <= 0 or p.name in DISPLAY_BANNED:
+            continue
+        ceiling = float(p.kv_store.get('ceiling') or p.proj)
+        flex_rows.append((
+            p.name, p.pos, p.proj, ceiling, p.cost,
+            p.proj / p.cost * 1000,
+            ceiling / p.cost * 1000,
+            p.team, get_opponent(p),
+        ))
+    flex_rows.sort(key=lambda row: row[3], reverse=True)
+    print_table(
+        "SORTED SINGLE-GAME FLEX VALUES (all positions, by ceiling)",
+        f"{'Name':<26} {'Pos':<4} {'Proj':>7} {'Ceil':>7} {'Salary':>9} "
+        f"{'Val':>6} {'Ceil/$':>7} {'Team':>5} {'Opp':>5}",
+        [
+            f"{name:<26} {pos:<4} {proj:>7.2f} {ceiling:>7.2f} ${cost:>8,.0f} "
+            f"{value:>5.1f}x {ceil_value:>6.1f}x {team:>5} {opp:>5}"
+            for name, pos, proj, ceiling, cost, value, ceil_value, team, opp
+            in flex_rows[:20]
+        ],
+        86,
+    )
 
 role_risers = []
 for p in players:
@@ -1453,7 +1488,6 @@ else:
 # Optimizer: draftfast weighted optimization
 # ============================================================
 
-BANNED = config.BANNED_SINGLE if SINGLE_GAME else config.BANNED_CLASSIC
 BLOCKED_TEAMS = config.BLOCKED_TEAMS
 constraints = LineupConstraints(locked=config.LOCKED, banned=BANNED)
 
@@ -1724,6 +1758,20 @@ def same_team_wr_overlap_penalty(roster_players):
     )
 
 
+def same_team_rb_overlap_penalty(roster_players):
+    """Apply backfield-touch competition only when two teammates are rostered."""
+    if config.SAME_TEAM_RB_OVERLAP_PENALTY <= 0:
+        return 0.0
+    rbs_by_team = defaultdict(list)
+    for p in roster_players:
+        if base_position(p) == 'RB':
+            rbs_by_team[normalize_team_abbr(p.team)].append(p)
+    return compute_same_team_rb_overlap_penalty(
+        {team: len(team_rbs) for team, team_rbs in rbs_by_team.items()},
+        config.SAME_TEAM_RB_OVERLAP_PENALTY,
+    )
+
+
 def same_team_wr_te_overlap_penalty(roster_players):
     """Bounded target-share adjustment for short-slate WR/TE lineup pairs."""
     if (SINGLE_GAME
@@ -1760,14 +1808,16 @@ def same_team_wr_te_overlap_penalty(roster_players):
 def get_score(roster):
     return (sum(p.proj for p in roster.players)
             - same_team_wr_overlap_penalty(roster.players)
-            - same_team_wr_te_overlap_penalty(roster.players))
+            - same_team_wr_te_overlap_penalty(roster.players)
+            - same_team_rb_overlap_penalty(roster.players))
 
 
 def get_wta_score(roster):
     """Showdown selection score: sum each player's best available ceiling."""
     return (sum(p.kv_store.get('ceiling') or p.proj for p in roster.players)
             - same_team_wr_overlap_penalty(roster.players)
-            - same_team_wr_te_overlap_penalty(roster.players))
+            - same_team_wr_te_overlap_penalty(roster.players)
+            - same_team_rb_overlap_penalty(roster.players))
 
 
 def _roster_key(roster):
@@ -1972,6 +2022,7 @@ def enumerate_single_game_lineups(players, limit=None):
                        for team, required in required_per_team.items()):
                     continue
                 overlap_penalty = same_team_wr_overlap_penalty(roster_players)
+                overlap_penalty += same_team_rb_overlap_penalty(roster_players)
                 wta = sum(p.kv_store.get('ceiling') or p.proj for p in roster_players) - overlap_penalty
                 proj = sum(p.proj for p in roster_players) - overlap_penalty
                 found.append((wta, proj, salary, roster_players))
@@ -2160,6 +2211,9 @@ def print_optimized_roster(roster):
     wr_overlap_penalty = same_team_wr_overlap_penalty(roster.players)
     if wr_overlap_penalty > 0:
         print(f"same-team WR overlap adjustment = -{wr_overlap_penalty:.2f} on lineup totals")
+    rb_overlap_penalty = same_team_rb_overlap_penalty(roster.players)
+    if rb_overlap_penalty > 0:
+        print(f"same-team RB overlap adjustment = -{rb_overlap_penalty:.2f} on lineup totals")
     wr_te_penalty = same_team_wr_te_overlap_penalty(roster.players)
     if wr_te_penalty > 0:
         print(

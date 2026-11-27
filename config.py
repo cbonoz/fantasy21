@@ -98,7 +98,7 @@ SEASON_START = '09/13/2026'
 MAX_SALARY = 12900
 SALARY_MAX = 60000
 SALARY_MIN_OFFSET = 100
-SALARY_MIN_OFFSET_SINGLE = 300
+SALARY_MIN_OFFSET_SINGLE = 200
 MIN_SALARY_CLASSIC = 5000
 MIN_SALARY_SINGLE = 2000
 MIN_QB_SALARY_CLASSIC = 6800
@@ -208,6 +208,9 @@ SINGLE_GAME_WR1_OVERRIDES = {
 # General names for the roster-level adjustment; initialized from the legacy
 # settings so existing weekly configuration continues to work.
 SAME_TEAM_WR_OVERLAP_PENALTY = SINGLE_GAME_SAME_TEAM_WR_PENALTY
+# Two same-team RBs compete for the same touches; their ceilings are not
+# independent, so a lineup that rosters both gets a small capped deduction.
+SAME_TEAM_RB_OVERLAP_PENALTY = 2.0
 # Small-slate WR/TE target competition is assessed at lineup level so neither
 # player's standalone projection is reduced when the teammate is not rostered.
 SAME_TEAM_WR_TE_TARGET_SHARE_WEIGHT = 4.0
@@ -270,7 +273,9 @@ FPA_CACHE_VERSION = 2
 # too steep; most of a defense's bad-weather edge is already in the implied
 # team total, so its direct boost stays small.
 WEATHER_MAX_ADJUSTMENT = {
-    'K': 0.18,
+    # Wind is the best-supported kicker effect: 20+ mph cuts long attempts and
+    # FG%, especially with rain, so allow a larger total move than before.
+    'K': 0.25,
     'D': 0.06,
 }
 
@@ -323,17 +328,16 @@ ALLOW_PLAYERS = [
 
 # These lists are generally ad-hoc and can be ignored by AI updates generally
 BANNED_CLASSIC = [
-    'DeVonta Smith','Kyle Monangai', 'Kansas City Chiefs', 'Jared Goff', 'Dallas Cowboys', 'Buffalo Bills', 'Detroit Lions', 'CeeDee Lamb'
-    # 'DeVonta Smith', 'Kyle Monangai', 'Kansas City Chiefs', 'Detroit Lions', 'Jared Goff', 'Buffalo Bills', 'George Pickens'
+    'DeMario Douglas', 'Adonai Mitchell', 'Brenton Strange',
 ]
 
 BANNED_SINGLE = [
-    "D'Andre Swift", "D'Andre Swift (MVP)", 'DJ Moore', 'James Cook III (MVP)', 'Kendre Miller', 'Brevyn Spann-Ford',
-    # 'Kyle Monangai (MVP)', "D'Andre Swift",
-    'Pierre Strong Jr.','Savion Williams (MVP)', 'Christian Watson (MVP)', 'Colby Parkinson', 'Matthew Stafford (MVP)'
+    'Aaron Rodgers', 'Aaron Rodgers (MVP)', 'Bo Nix (MVP)',
 ]
 
 LOCKED = [
+    'James Cook III (MVP)', 'Mason Rudolph', "Trey McBride", 'Cam Skattebo',
+    # 'Tyler Bass'
     # 'Saquon Barkley'
     # 'Emmett Johnson (MVP)', 'James Cook III', 'Ty Johnson', 'George Pickens',
     #  'Buffalo Bills'
